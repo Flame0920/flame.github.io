@@ -1,0 +1,634 @@
+
+<!DOCTYPE html>
+<html lang="zh-cn,en,default">
+    
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="Flame&#39;s Security Home">
+    <title>WRK驱动加载流程分析(中) - Flame&#39;s Security Home</title>
+    <meta name="author" content="BurnFlame">
+    
+        <meta name="keywords" content="WRK,LoadDriver">
+    
+    
+    
+        
+            <link rel="alternate" type="application/atom+xml" title="RSS" href="/flame.github.io/atom.xml">
+        
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg"},"articleBody":" 分析驱动加载中的关键函数(中篇) — 分析 MmLoadSystemImage\n\n\nMmLoadSystemImage函数声明123456789NTSTATUSMmLoadSystemImage (    IN PUNICODE_STRING ImageFileName,    IN PUNICODE_STRING NamePrefix OPTIONAL,    IN PUNICODE_STRING LoadedBaseName OPTIONAL,    IN ULONG LoadFlags,    OUT PVOID *ImageHandle,    OUT PVOID *ImageBaseAddress    );\n\n函数参数\nImageFileName： 需要加载的Image的完整路径，包括image名字\nNamePrefix： image名字前缀，通过使用不同的前缀，可以多次加载相同的image\nLoadedBaseName： 指定加载image的名字\nLoadFlags：\nMM_LOAD_IMAGE_IN_SESSION (0x1)： 是否在会话空间中加载image\nMM_LOAD_IMAGE_AND_LOCKDOWN (0x2):  如果为TURE, image的Page段应该为non-pageable\n\n\nImageHandle：返回加载的image的section pointer\nImageBaseAddress： 保存加载的image基址\n\n函数体分析\n判断是否需要加载到进程会话空间\n12345678910if (LoadFlags &amp; MM_LOAD_IMAGE_IN_SESSION) &#123;    // 需要加载到会话空间    ASSERT (NamePrefix == NULL);    ASSERT (LoadedBaseName == NULL);    if ((PsGetCurrentProcess()-&gt;Flags &amp; PS_PROCESS_FLAGS_IN_SESSION) == 0) &#123;        // 当前进程没有会话空间 （猜测PS_PROCESS_FLAGS_IN_SESSION含义）        return STATUS_NO_MEMORY;    &#125;&#125;\n初始化局部变量\n\n通过ImageFileName获取image文件名\n\n如果NamePrefix参数存在，则添加BaseName  = NamePrefix + BaseName \n\n如果LoadedBaseName参数存在，则BaseName = LoadedBaseName\n\n阻止当前上下文环境APC\n1234567891011    LoadLockOwned = TRUE;    CurrentThread = KeGetCurrentThread ();    KeEnterCriticalRegionThread (CurrentThread);// KeWaitForSingleObject 这个有待分析    KeWaitForSingleObject (&amp;MmSystemLoadLock,                           WrVirtualMemory,                           KernelMode,                           FALSE,                           (PLARGE_INTEGER)NULL);\n查找image是否已经加载\n123456789101112131415NextEntry = PsLoadedModuleList.Flink;while (NextEntry != &amp;PsLoadedModuleList) &#123;    DataTableEntry = CONTAINING_RECORD (NextEntry,                                        KLDR_DATA_TABLE_ENTRY,                                        InLoadOrderLinks);    if (RtlEqualUnicodeString (&amp;PrefixedImageName,                               &amp;DataTableEntry-&gt;FullDllName,                               TRUE)) &#123;        break;  // 如果发现相同名字的模块，则break跳出    &#125;    NextEntry = NextEntry-&gt;Flink;&#125;\n\n\n如果image模块已经加载\n1234567891011121314151617181920212223242526272829303132333435363738394041if (NextEntry != &amp;PsLoadedModuleList)&#123;      if ((LoadFlags &amp; MM_LOAD_IMAGE_IN_SESSION) == 0) &#123; // 不用加载到会话空间中      if (MI_IS_SESSION_ADDRESS (DataTableEntry-&gt;DllBase) == TRUE) &#123;           // 发现加载的模块在会话空间地址段内           Status = STATUS_CONFLICTING_ADDRESSES;       &#125;       else &#123;           // 加载的模块不在会话空间地址段内，保存ImageHandle和ImageBaseAddress，并返回           *ImageHandle = DataTableEntry;            *ImageBaseAddress = DataTableEntry-&gt;DllBase;           Status = STATUS_IMAGE_ALREADY_LOADED;       &#125;            goto return2;    &#125;        // 走到这里说明 LoadFlags &amp; MM_LOAD_IMAGE_IN_SESSION ！= 0， 驱动是要加载到会话空间中的        if (MI_IS_SESSION_ADDRESS (DataTableEntry-&gt;DllBase) == FALSE) &#123;            // 如果加载的模块地址不在会话空间地址段内，则返回STATUS_CONFLICTING_ADDRESSES            Status = STATUS_CONFLICTING_ADDRESSES;            goto return2;        &#125;    ........        Status = MiSessionInsertImage (DataTableEntry-&gt;DllBase);   // 插入到会话空间image list中    ........        // Status == STATUS_SUCCESS走下面        // （英文目标有待分析）        // This driver is already loaded in the system, but not in        // this particular session - share it now.        //        FoundDataTableEntry = DataTableEntry;        DataTableEntry-&gt;LoadCount += 1;        ASSERT (DataTableEntry-&gt;SectionPointer != NULL);        SectionPointer = DataTableEntry-&gt;SectionPointer;&#125;\n如果image模块没有加载，且SectionPointer == nullptr \n\nZwOpenFile打开文件\nMmCheckSystemImage检查文件是否符合要求\n如果要加载到会话空间，SectionAccess = SECTION_MAP_READ | SECTION_MAP_EXECUTE，否则SectionAccess  = SECTION_ALL_ACCESS；\nZwCreateSection创建节对象\nObReferenceObjectByHandle获取SectionPointer\n\n\n\n\n通过MiLoadImageSection函数加载Image模块到内核地址空间中\n\n如果驱动是第一次加载:\n\n        if (((LoadFlags &amp; MM_LOAD_IMAGE_IN_SESSION) == 0) ||\n            (*ImageBaseAddress != SectionPointer-&gt;Segment-&gt;BasedAddress)) &#123;\n\n            // 不是加载到会话空间，且预想加载地址和实际加载地址不一致\n\n            __try &#123;\n                Status = LdrRelocateImage (*ImageBaseAddress,\n                                           &quot;SYSLDR&quot;,\n                                           STATUS_SUCCESS,\n                                           STATUS_CONFLICTING_ADDRESSES,\n                                           STATUS_INVALID_IMAGE_FORMAT);\n\n            &#125; __except (EXCEPTION_EXECUTE_HANDLER) &#123;\n                Status = GetExceptionCode ();\n                KdPrint((&quot;MM:sysload - LdrRelocateImage failed status %lx\\n&quot;,\n                          Status));\n            &#125;\n\n            if (!NT_SUCCESS(Status)) &#123;\n\n                //\n                // Unload the system image and dereference the section.\n                //\n\n                goto return1;\n            &#125;      \n        &#125;     \n\n\n如果是加载到会话空间中 ： 略\n\n填充DataTableEntry（PKLDR_DATA_TABLE_ENTRY）\n\nMiCaptureImageExceptionValues(DataTableEntry) : \n向DataTableEntry-&gt;ExceptionTable写入信息\n\nMiProcessLoaderEntry (DataTableEntry, TRUE) ： 将DataTableEntry 插入到 PsLoadedModuleList中 （重要）\n\nMiResolveImageReferences()  \n\nCall Image 回调\n\n\n\n\n","dateCreated":"2021-11-17T21:15:15+08:00","dateModified":"2022-05-16T16:30:27+08:00","datePublished":"2021-11-17T21:15:15+08:00","description":" 分析驱动加载中的关键函数(中篇) — 分析 MmLoadSystemImage","headline":"WRK驱动加载流程分析(中)","image":["image_1.jpg","image_2.jpg"],"mainEntityOfPage":{"@type":"WebPage","@id":"https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/"},"publisher":{"@type":"Organization","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg","logo":{"@type":"ImageObject","url":"image_touxiang.jpg"}},"url":"https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/","keywords":"Driver, C/C++, WRK","thumbnailUrl":"image_1.jpg"}</script>
+    <meta name="description" content="分析驱动加载中的关键函数(中篇) — 分析 MmLoadSystemImage">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="WRK驱动加载流程分析(中)">
+<meta property="og:url" content="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/index.html">
+<meta property="og:site_name" content="Flame&#39;s Security Home">
+<meta property="og:description" content="分析驱动加载中的关键函数(中篇) — 分析 MmLoadSystemImage">
+<meta property="og:locale" content="zh_CN">
+<meta property="article:published_time" content="2021-11-17T13:15:15.000Z">
+<meta property="article:modified_time" content="2022-05-16T08:30:27.047Z">
+<meta property="article:author" content="BurnFlame">
+<meta property="article:tag" content="Driver">
+<meta property="article:tag" content="C&#x2F;C++">
+<meta property="article:tag" content="WRK">
+<meta name="twitter:card" content="summary">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://flame0920.github.io/flame.github.io/assets/images/image_touxiang.jpg"/>
+    
+    
+        <meta property="og:image" content="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/image_1.jpg"/>
+        <meta class="swiftype" name="image" data-type="enum" content="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/image_1.jpg"/>
+    
+    
+        <meta property="og:image" content="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/image_2.jpg"/>
+        <meta class="swiftype" name="image" data-type="enum" content="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/image_2.jpg"/>
+    
+    
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/flame.github.io/assets/css/style-x0jadukrm45advwnfmcp9xm9vilsmuvhdmvokyyyqc22ptebh3ezts4grfq5.min.css">
+
+    <!--STYLES END-->
+    
+
+    
+
+    
+</head>
+
+    <body>
+        <div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="4">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/flame.github.io/"
+            aria-label=""
+        >
+            Flame&#39;s Security Home
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="打开链接: /flame.github.io/#about"
+            >
+        
+        
+            <img class="header-picture" src="/flame.github.io/assets/images/image_touxiang.jpg" alt="作者的图片"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="4">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/flame.github.io/#about"
+                    aria-label="阅读有关作者的更多信息"
+                >
+                    <img class="sidebar-profile-picture" src="/flame.github.io/assets/images/image_touxiang.jpg" alt="作者的图片"/>
+                </a>
+                <h4 class="sidebar-profile-name">BurnFlame</h4>
+                
+                    <h5 class="sidebar-profile-bio"><p>author.bio</p>
+</h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/flame.github.io/"
+                            
+                            rel="noopener"
+                            title="首页"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">首页</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/flame.github.io/all-categories"
+                            
+                            rel="noopener"
+                            title="分类"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">分类</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/flame.github.io/all-tags"
+                            
+                            rel="noopener"
+                            title="标签"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">标签</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/flame.github.io/all-archives"
+                            
+                            rel="noopener"
+                            title="归档"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">归档</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link open-algolia-search"
+                            href="#search"
+                            
+                            rel="noopener"
+                            title="搜索"
+                        >
+                        <i class="sidebar-button-icon fa fa-search" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">搜索</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="#about"
+                            
+                            rel="noopener"
+                            title="关于"
+                        >
+                        <i class="sidebar-button-icon fa fa-question" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">关于</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://github.com/Flame0920"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="GitHub"
+                        >
+                        <i class="sidebar-button-icon fab fa-github" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">GitHub</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/flame.github.io/zhang919963919@gmail.com"
+                            
+                            rel="noopener"
+                            title="邮箱"
+                        >
+                        <i class="sidebar-button-icon fa fa-envelope" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">邮箱</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/flame.github.io/atom.xml"
+                            
+                            rel="noopener"
+                            title="RSS"
+                        >
+                        <i class="sidebar-button-icon fa fa-rss" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">RSS</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+        <div class="post-header-cover
+                    text-center
+                    post-header-cover--partial"
+             style="background-image:url('/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/image_2.jpg');"
+             data-behavior="4">
+            
+                <div class="post-header main-content-wrap text-center">
+    
+        <h1 class="post-title">
+            WRK驱动加载流程分析(中)
+        </h1>
+    
+    
+</div>
+
+            
+        </div>
+
+            <div id="main" data-behavior="4"
+                 class="hasCover
+                        hasCoverMetaIn
+                        hasCoverCaption">
+                
+<article class="post">
+    
+        <span class="post-header-cover-caption caption">WRK驱动加载流程分析(中)</span>
+    
+    
+    <div class="post-content markdown">
+        <div class="main-content-wrap">
+            <p> 分析驱动加载中的关键函数(中篇) — 分析 MmLoadSystemImage</p>
+<span id="more"></span>
+
+<h3 id="MmLoadSystemImage"><a href="#MmLoadSystemImage" class="headerlink" title="MmLoadSystemImage"></a>MmLoadSystemImage</h3><h4 id="函数声明"><a href="#函数声明" class="headerlink" title="函数声明"></a>函数声明</h4><figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="function">NTSTATUS</span></span><br><span class="line"><span class="function"><span class="title">MmLoadSystemImage</span> <span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">    IN PUNICODE_STRING ImageFileName,</span></span></span><br><span class="line"><span class="params"><span class="function">    IN PUNICODE_STRING NamePrefix OPTIONAL,</span></span></span><br><span class="line"><span class="params"><span class="function">    IN PUNICODE_STRING LoadedBaseName OPTIONAL,</span></span></span><br><span class="line"><span class="params"><span class="function">    IN ULONG LoadFlags,</span></span></span><br><span class="line"><span class="params"><span class="function">    OUT PVOID *ImageHandle,</span></span></span><br><span class="line"><span class="params"><span class="function">    OUT PVOID *ImageBaseAddress</span></span></span><br><span class="line"><span class="params"><span class="function">    )</span></span>;</span><br></pre></td></tr></table></figure>
+
+<h4 id="函数参数"><a href="#函数参数" class="headerlink" title="函数参数"></a>函数参数</h4><ul>
+<li><strong>ImageFileName</strong>： 需要加载的Image的完整路径，包括image名字</li>
+<li><strong>NamePrefix</strong>： image名字前缀，通过使用不同的前缀，可以多次加载相同的image</li>
+<li><strong>LoadedBaseName</strong>： 指定加载image的名字</li>
+<li><strong>LoadFlags</strong>：<ul>
+<li>MM_LOAD_IMAGE_IN_SESSION (0x1)： 是否在会话空间中加载image</li>
+<li>MM_LOAD_IMAGE_AND_LOCKDOWN (0x2):  如果为TURE, image的Page段应该为non-pageable</li>
+</ul>
+</li>
+<li><strong>ImageHandle</strong>：返回加载的image的section pointer</li>
+<li><strong>ImageBaseAddress</strong>： 保存加载的image基址</li>
+</ul>
+<h4 id="函数体分析"><a href="#函数体分析" class="headerlink" title="函数体分析"></a>函数体分析</h4><ol>
+<li><p>判断是否需要加载到进程会话空间</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (LoadFlags &amp; MM_LOAD_IMAGE_IN_SESSION) &#123;</span><br><span class="line">    <span class="comment">// 需要加载到会话空间</span></span><br><span class="line">    <span class="built_in">ASSERT</span> (NamePrefix == <span class="literal">NULL</span>);</span><br><span class="line">    <span class="built_in">ASSERT</span> (LoadedBaseName == <span class="literal">NULL</span>);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> ((<span class="built_in">PsGetCurrentProcess</span>()-&gt;Flags &amp; PS_PROCESS_FLAGS_IN_SESSION) == <span class="number">0</span>) &#123;</span><br><span class="line">        <span class="comment">// 当前进程没有会话空间 （猜测PS_PROCESS_FLAGS_IN_SESSION含义）</span></span><br><span class="line">        <span class="keyword">return</span> STATUS_NO_MEMORY;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure></li>
+<li><p>初始化局部变量</p>
+</li>
+<li><p>通过<strong>ImageFileName</strong>获取image文件名</p>
+</li>
+<li><p>如果<strong>NamePrefix</strong>参数存在，则添加BaseName  = <strong>NamePrefix</strong> + BaseName </p>
+</li>
+<li><p>如果<strong>LoadedBaseName</strong>参数存在，则BaseName = <strong>LoadedBaseName</strong></p>
+</li>
+<li><p>阻止当前上下文环境APC</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">    LoadLockOwned = TRUE;</span><br><span class="line"></span><br><span class="line">    CurrentThread = <span class="built_in">KeGetCurrentThread</span> ();</span><br><span class="line">    <span class="built_in">KeEnterCriticalRegionThread</span> (CurrentThread);</span><br><span class="line"></span><br><span class="line"><span class="comment">// KeWaitForSingleObject 这个有待分析</span></span><br><span class="line">    <span class="built_in">KeWaitForSingleObject</span> (&amp;MmSystemLoadLock,</span><br><span class="line">                           WrVirtualMemory,</span><br><span class="line">                           KernelMode,</span><br><span class="line">                           FALSE,</span><br><span class="line">                           (PLARGE_INTEGER)<span class="literal">NULL</span>);</span><br></pre></td></tr></table></figure></li>
+<li><p>查找<strong>image</strong>是否已经加载</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">NextEntry = PsLoadedModuleList.Flink;</span><br><span class="line"><span class="keyword">while</span> (NextEntry != &amp;PsLoadedModuleList) &#123;</span><br><span class="line"></span><br><span class="line">    DataTableEntry = <span class="built_in">CONTAINING_RECORD</span> (NextEntry,</span><br><span class="line">                                        KLDR_DATA_TABLE_ENTRY,</span><br><span class="line">                                        InLoadOrderLinks);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (<span class="built_in">RtlEqualUnicodeString</span> (&amp;PrefixedImageName,</span><br><span class="line">                               &amp;DataTableEntry-&gt;FullDllName,</span><br><span class="line">                               TRUE)) &#123;</span><br><span class="line">        <span class="keyword">break</span>;  <span class="comment">// 如果发现相同名字的模块，则break跳出</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    NextEntry = NextEntry-&gt;Flink;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<ul>
+<li><p>如果image模块已经加载</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (NextEntry != &amp;PsLoadedModuleList)</span><br><span class="line">&#123;</span><br><span class="line"></span><br><span class="line">      <span class="keyword">if</span> ((LoadFlags &amp; MM_LOAD_IMAGE_IN_SESSION) == <span class="number">0</span>) &#123; <span class="comment">// 不用加载到会话空间中</span></span><br><span class="line">      <span class="keyword">if</span> (<span class="built_in">MI_IS_SESSION_ADDRESS</span> (DataTableEntry-&gt;DllBase) == TRUE) &#123;</span><br><span class="line">           <span class="comment">// 发现加载的模块在会话空间地址段内</span></span><br><span class="line">           Status = STATUS_CONFLICTING_ADDRESSES;</span><br><span class="line">       &#125;</span><br><span class="line">       <span class="keyword">else</span> &#123;</span><br><span class="line">           <span class="comment">// 加载的模块不在会话空间地址段内，保存ImageHandle和ImageBaseAddress，并返回</span></span><br><span class="line">           *ImageHandle = DataTableEntry; </span><br><span class="line">           *ImageBaseAddress = DataTableEntry-&gt;DllBase;</span><br><span class="line">           Status = STATUS_IMAGE_ALREADY_LOADED;</span><br><span class="line">       &#125;</span><br><span class="line">            <span class="keyword">goto</span> return2;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 走到这里说明 LoadFlags &amp; MM_LOAD_IMAGE_IN_SESSION ！= 0， 驱动是要加载到会话空间中的</span></span><br><span class="line">        <span class="keyword">if</span> (<span class="built_in">MI_IS_SESSION_ADDRESS</span> (DataTableEntry-&gt;DllBase) == FALSE) &#123;</span><br><span class="line">            <span class="comment">// 如果加载的模块地址不在会话空间地址段内，则返回STATUS_CONFLICTING_ADDRESSES</span></span><br><span class="line">            Status = STATUS_CONFLICTING_ADDRESSES;</span><br><span class="line">            <span class="keyword">goto</span> return2;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">    ........</span><br><span class="line">        Status = <span class="built_in">MiSessionInsertImage</span> (DataTableEntry-&gt;DllBase);   <span class="comment">// 插入到会话空间image list中</span></span><br><span class="line"></span><br><span class="line">    ........</span><br><span class="line">        <span class="comment">// Status == STATUS_SUCCESS走下面</span></span><br><span class="line">        <span class="comment">// （英文目标有待分析）</span></span><br><span class="line">        <span class="comment">// This driver is already loaded in the system, but not in</span></span><br><span class="line">        <span class="comment">// this particular session - share it now.</span></span><br><span class="line">        <span class="comment">//</span></span><br><span class="line">        FoundDataTableEntry = DataTableEntry;</span><br><span class="line"></span><br><span class="line">        DataTableEntry-&gt;LoadCount += <span class="number">1</span>;</span><br><span class="line"></span><br><span class="line">        <span class="built_in">ASSERT</span> (DataTableEntry-&gt;SectionPointer != <span class="literal">NULL</span>);</span><br><span class="line"></span><br><span class="line">        SectionPointer = DataTableEntry-&gt;SectionPointer;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure></li>
+<li><p>如果image模块没有加载，且SectionPointer == nullptr </p>
+<ul>
+<li><strong>ZwOpenFile</strong>打开文件</li>
+<li><strong>MmCheckSystemImage</strong>检查文件是否符合要求</li>
+<li>如果要加载到会话空间，<strong>SectionAccess</strong> = <strong>SECTION_MAP_READ</strong> | <strong>SECTION_MAP_EXECUTE</strong>，否则<strong>SectionAccess</strong>  = <strong>SECTION_ALL_ACCESS</strong>；</li>
+<li><strong>ZwCreateSection</strong>创建节对象</li>
+<li><strong>ObReferenceObjectByHandle</strong>获取<strong>SectionPointer</strong></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p>通过<strong>MiLoadImageSection</strong>函数加载Image模块到内核地址空间中</p>
+</li>
+<li><p>如果驱动是第一次加载:</p>
+<ul>
+<li><pre><code class="c++">        if (((LoadFlags &amp; MM_LOAD_IMAGE_IN_SESSION) == 0) ||
+            (*ImageBaseAddress != SectionPointer-&gt;Segment-&gt;BasedAddress)) &#123;
+
+            // 不是加载到会话空间，且预想加载地址和实际加载地址不一致
+
+            __try &#123;
+                Status = LdrRelocateImage (*ImageBaseAddress,
+                                           &quot;SYSLDR&quot;,
+                                           STATUS_SUCCESS,
+                                           STATUS_CONFLICTING_ADDRESSES,
+                                           STATUS_INVALID_IMAGE_FORMAT);
+
+            &#125; __except (EXCEPTION_EXECUTE_HANDLER) &#123;
+                Status = GetExceptionCode ();
+                KdPrint((&quot;MM:sysload - LdrRelocateImage failed status %lx\n&quot;,
+                          Status));
+            &#125;
+
+            if (!NT_SUCCESS(Status)) &#123;
+
+                //
+                // Unload the system image and dereference the section.
+                //
+
+                goto return1;
+            &#125;      
+        &#125;     
+</code></pre>
+</li>
+<li><p>如果是加载到会话空间中 ： 略</p>
+</li>
+<li><p>填充DataTableEntry（PKLDR_DATA_TABLE_ENTRY）</p>
+</li>
+<li><p><strong>MiCaptureImageExceptionValues</strong>(DataTableEntry) : </p>
+<p>向DataTableEntry-&gt;ExceptionTable写入信息</p>
+</li>
+<li><p><strong>MiProcessLoaderEntry</strong> (DataTableEntry, TRUE) ： 将DataTableEntry 插入到 PsLoadedModuleList中 （<strong>重要</strong>）</p>
+</li>
+<li><p>MiResolveImageReferences()  </p>
+</li>
+<li><p>Call Image 回调</p>
+</li>
+</ul>
+</li>
+</ol>
+
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">标签</span><br/>
+                
+    <a class="tag tag--primary tag--small t-none-link" href="/flame.github.io/tags/C-C/" rel="tag">C/C++</a> <a class="tag tag--primary tag--small t-none-link" href="/flame.github.io/tags/Driver/" rel="tag">Driver</a> <a class="tag tag--primary tag--small t-none-link" href="/flame.github.io/tags/WRK/" rel="tag">WRK</a>
+
+            </div>
+        
+        
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2022 BurnFlame. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/flame.github.io/assets/images/image_touxiang.jpg" alt="作者的图片"/>
+        
+            <h4 id="about-card-name">BurnFlame</h4>
+        
+            <div id="about-card-bio"><p>author.bio</p>
+</div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                <p>author.job</p>
+
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Mars
+            </div>
+        
+    </div>
+</div>
+
+        
+            <div id="algolia-search-modal" class="modal-container">
+    <div class="modal">
+        <div class="modal-header">
+            <span class="close-button"><i class="fa fa-times"></i></span>
+            <a href="https://algolia.com" target="_blank" rel="noopener" class="searchby-algolia text-color-light link-unstyled">
+                <span class="searchby-algolia-text text-color-light text-small">by</span>
+                <img class="searchby-algolia-logo" src="/flame.github.io/assets/images/logo-algolia-nebula-blue-full.svg">
+            </a>
+            <i class="search-icon fa fa-search"></i>
+            <form id="algolia-search-form">
+                <input type="text" id="algolia-search-input" name="search"
+                    class="form-control input--large search-input" placeholder="Search "
+                    />
+            </form>
+        </div>
+        <div class="modal-body">
+            <div class="no-result text-color-light text-center">没有找到文章</div>
+            <div class="results">
+                
+                <div class="media">
+                    
+                    <div class="media-left">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/"
+                            aria-label=": WRK驱动加载流程分析(上)"
+                        >
+                            <img class="media-image" src="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/image_1.jpg" width="90" height="90"/>
+                        </a>
+                    </div>
+                    
+                    <div class="media-body">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/"
+                            aria-label=": WRK驱动加载流程分析(上)"
+                        >
+                            <h3 class="media-heading">WRK驱动加载流程分析(上)</h3>
+                        </a>
+                        <span class="media-meta">
+                            <span class="media-date text-small">
+                                
+                                    2021年11月16日
+                                
+                            </span>
+                        </span>
+                        <div class="media-content hide-xs font-merryweather"><p> 分析驱动加载中的关键函数(上篇)</p></div>
+                    </div>
+                    <div style="clear:both;"></div>
+                    <hr>
+                </div>
+                
+                <div class="media">
+                    
+                    <div class="media-left">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/"
+                            aria-label=": WRK驱动加载流程分析(中)"
+                        >
+                            <img class="media-image" src="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/image_1.jpg" width="90" height="90"/>
+                        </a>
+                    </div>
+                    
+                    <div class="media-body">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/"
+                            aria-label=": WRK驱动加载流程分析(中)"
+                        >
+                            <h3 class="media-heading">WRK驱动加载流程分析(中)</h3>
+                        </a>
+                        <span class="media-meta">
+                            <span class="media-date text-small">
+                                
+                                    2021年11月17日
+                                
+                            </span>
+                        </span>
+                        <div class="media-content hide-xs font-merryweather"><p> 分析驱动加载中的关键函数(中篇) — 分析 MmLoadSystemImage</p></div>
+                    </div>
+                    <div style="clear:both;"></div>
+                    <hr>
+                </div>
+                
+                <div class="media">
+                    
+                    <div class="media-body">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                            aria-label=": WRK驱动加载流程分析(下)"
+                        >
+                            <h3 class="media-heading">WRK驱动加载流程分析(下)</h3>
+                        </a>
+                        <span class="media-meta">
+                            <span class="media-date text-small">
+                                
+                                    2021年11月17日
+                                
+                            </span>
+                        </span>
+                        <div class="media-content hide-xs font-merryweather"></div>
+                    </div>
+                    <div style="clear:both;"></div>
+                    <hr>
+                </div>
+                
+                <div class="media">
+                    
+                    <div class="media-body">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                            aria-label=": InfinityHook分析"
+                        >
+                            <h3 class="media-heading">InfinityHook分析</h3>
+                        </a>
+                        <span class="media-meta">
+                            <span class="media-date text-small">
+                                
+                                    2022年1月15日
+                                
+                            </span>
+                        </span>
+                        <div class="media-content hide-xs font-merryweather"><p> 分析InfinityHook</p></div>
+                    </div>
+                    <div style="clear:both;"></div>
+                    <hr>
+                </div>
+                
+            </div>
+        </div>
+        <div class="modal-footer">
+            <p class="results-count text-medium"
+                data-message-zero="没有找到文章"
+                data-message-one="找到 1 篇文章"
+                data-message-other="找到 {n} 篇文章">
+                找到 4 篇文章
+            </p>
+        </div>
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/flame.github.io/assets/images/cover.jpg');"></div>
+        <!--SCRIPTS-->
+
+<script src="/flame.github.io/assets/js/script-mosusumf5fqlcn7wgpgrqqha8jzxyrqoyzx05l7hglx8jktqu3y1jgo5vc3f.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+
+
+    
+<script src="/flame.github.io/assets/js/moment-with-locales.js"></script>
+
+    
+<script src="/flame.github.io/assets/js/algoliasearch.js"></script>
+
+    <script>
+      var algoliaClient = algoliasearch('EDNF6QBKHC', '9898a7fa6b2df0f3a83a170d1207e72a');
+      var algoliaIndex = algoliaClient.initIndex('my-hexo-blog');
+    </script>
+
+
+    </body>
+</html>

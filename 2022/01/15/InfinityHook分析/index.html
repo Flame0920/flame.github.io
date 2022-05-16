@@ -1,0 +1,859 @@
+
+<!DOCTYPE html>
+<html lang="zh-cn,en,default">
+    
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="Flame&#39;s Security Home">
+    <title>InfinityHook分析 - Flame&#39;s Security Home</title>
+    <meta name="author" content="BurnFlame">
+    
+        <meta name="keywords" content="InfinityHook">
+    
+    
+    
+        
+            <link rel="alternate" type="application/atom+xml" title="RSS" href="/flame.github.io/atom.xml">
+        
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg"},"articleBody":" 分析InfinityHook\n\n\nInfinityHook剖析​    整体原理请看https://bbs.pediy.com/thread-253450.htm 剖析 InfinityHook 原理 掀起一场更激烈的攻与防恶战 \n​    本文着重讲解这篇文章中令人疑惑的几个重点 :\n\nClientContext 值分别为1、2、3时的3个不同的函数是在哪里被赋值和调用的\nEnableFlags 的值是如何影响ETW流程的\nEnableFlags  == EVENT_TRACE_FLAG_SYSTEMCALL时， 替换函数是如何定位到syscall的函数地址以及调用号\n扩展EnableFlags == 其他值时，如何hook\n\n关键函数\n123456789101112EXTERN_CNTSYSCALLAPI NTSTATUSNTAPIZwTraceControl (    _In_ ULONG FunctionCode,    _In_reads_bytes_opt_(InBufferLen) PVOID InBuffer,    _In_ ULONG InBufferLen,     _Out_writes_bytes_opt_(OutBufferLen) PVOID OutBuffer,    _In_ ULONG OutBufferLen,    _Out_ PULONG ReturnLength);\n\n1、ClientContext​    当FunctionCode == EtwpStartTrace时，调用NtTraceControl，会走到EtwpStartTrace函数，其中调用了EtwpStartLogger函数，参数与EtwpStartTrace一致。\n​    追踪ClientContext字段：\n\n​    EtwpInitLoggerContext 申请了一个**_WMI_LOGGER_CONTEXT**结构的指针LoggerContext，\n并在接下来的过程中使得LoggerContext-&gt;ClockType = Properties-&gt;ClientContext\n(Properties 指针是ZwTraceControl传入的指针，详情请看文章开头的链接)\n​    之后调用关键函数 ： EtwpInitializeTimeStamp\n​    \n​    在这个函数内：\n\n​    通过ClockType来获取相应的函数  : \n\n当ClockType = 1时， LoggerContext-&gt;GetCpuClock = PpmQueryTime\n\n当ClockType = 2时， LoggerContext-&gt;GetCpuClock = EtwpGetSystemTime\n\n当ClockType = 3时， LoggerContext-&gt;GetCpuClock = EtwpGetCycleCount\n\n当ClockType = 4时，如果EtwpGetHostPerfCounter能执行成功，则为EtwpGetHostPerfCounter，如果执行失败，则ClockType = 1；\n至此，函数赋值点以及规则弄清楚了，接下来就是搞清楚哪里调用的GetCpuClock 函数。\n拿syscall监控举例 : \n\n\n\n在调用NT函数前，先调用了PerfInfoLogSysCallEntry函数：\n\nPerfInfoLogSysCallEntry函数中红箭头指向位置为MagicCode，可以用来标定栈的位置，以便寻找调用函数地址和调用号，具体分析在第三节。\n继续跟踪EtwTraceSiloKernelEvent，发现调用了EtwpLogKernelEvent函数：\n\n跟踪EtwpLogKernelEvent函数，调用了EtwpReserveTraceBuffer函数：\n\n在EtwpReserveTraceBuffer函数中发现：\n\n​    此处函数调用的偏移点0x28与之前分析的赋值偏移点GetCpuClock(0x28)一致，所以此处就是GetCpuClock的调用点（这里分析结论下得比较武断，其实需要利用windbg下断点来看看是否真的一致，但是我懒了 - -）。\n​    此时分析的关键点变成rdi从何处来，根据IDA可知，EtwpReserveTraceBuffer中rdi = rcx，而rcx来自EtwpLogKernelEvent中mov rcx, r14。所以需要找出r14从何处来：\n\n​    根据上图可知，r14 = [rcx + rax] = [[r12 + 0x1C8] + r158], 而在EtwpLogKernelEvent中*r12 = rdx ， rdx来自EtwTraceSiloKernelEvent函数中的：\n\n​    r15 根据windbg逆向可得 r15 = 2（实际上R15来自EtwpLogKernelEvent 中r8，而r8的赋值比较复杂，这里简化起见直接给结论），所以最后结果就是\nLoggerContext = [[[EtwpHostSiloState] + 0x1C8] + 0x10]。\n​    根据上述结论可知，如果要替换GetCpuClock函数，则需要定位到EtwpHostSiloState，此处有个特殊的地方，根据IDA交叉引用可以看到：\n\n​    在一个函数中，EtwpHostSiloState被赋值：\n\n​    这里有两个全局变量被赋予值，qword_140429E08 = [rdi + 0x1C8] , qword_140429E10 = rdi通过IDA查看该值：\n\n​    发现全局变量 qword_140429E08 - 0x10的位置有一个EtwpDebuggerData，这个可以通过特征码定位，简化寻找EtwpHostSiloState的流程（因为EtwpDebuggerData绝大部分系统都有，而EtwpHostSiloState在不同的系统名称不同）。\n​    所以，LoggerContext =[[[EtwpDebuggerData + 0x18] + 0x1C8] + 0x10] , 或者 LoggerContext =[[EtwpDebuggerData + 0x10] + 0x10]\n","dateCreated":"2022-01-15T19:59:06+08:00","dateModified":"2022-03-11T13:46:51+08:00","datePublished":"2022-01-15T19:59:06+08:00","description":" 分析InfinityHook","headline":"InfinityHook分析","image":[],"mainEntityOfPage":{"@type":"WebPage","@id":"https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"},"publisher":{"@type":"Organization","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg","logo":{"@type":"ImageObject","url":"image_touxiang.jpg"}},"url":"https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/","keywords":"Driver, C/C++"}</script>
+    <meta name="description" content="分析InfinityHook">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="InfinityHook分析">
+<meta property="og:url" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/index.html">
+<meta property="og:site_name" content="Flame&#39;s Security Home">
+<meta property="og:description" content="分析InfinityHook">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116172443129.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116173622317.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116174711686.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117164224033.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117175650031.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182009670.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182051726.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182204758.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182703739.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182852327.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117184204261.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117184938866.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117184302975.png">
+<meta property="article:published_time" content="2022-01-15T11:59:06.000Z">
+<meta property="article:modified_time" content="2022-03-11T05:46:51.693Z">
+<meta property="article:author" content="BurnFlame">
+<meta property="article:tag" content="Driver">
+<meta property="article:tag" content="C&#x2F;C++">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116172443129.png">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://flame0920.github.io/flame.github.io/assets/images/image_touxiang.jpg"/>
+    
+    
+    
+    
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/flame.github.io/assets/css/style-x0jadukrm45advwnfmcp9xm9vilsmuvhdmvokyyyqc22ptebh3ezts4grfq5.min.css">
+
+    <!--STYLES END-->
+    
+
+    
+
+    
+        
+    
+</head>
+
+    <body>
+        <div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="4">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/flame.github.io/"
+            aria-label=""
+        >
+            Flame&#39;s Security Home
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="打开链接: /flame.github.io/#about"
+            >
+        
+        
+            <img class="header-picture" src="/flame.github.io/assets/images/image_touxiang.jpg" alt="作者的图片"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="4">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/flame.github.io/#about"
+                    aria-label="阅读有关作者的更多信息"
+                >
+                    <img class="sidebar-profile-picture" src="/flame.github.io/assets/images/image_touxiang.jpg" alt="作者的图片"/>
+                </a>
+                <h4 class="sidebar-profile-name">BurnFlame</h4>
+                
+                    <h5 class="sidebar-profile-bio"><p>author.bio</p>
+</h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/flame.github.io/"
+                            
+                            rel="noopener"
+                            title="首页"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">首页</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/flame.github.io/all-categories"
+                            
+                            rel="noopener"
+                            title="分类"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">分类</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/flame.github.io/all-tags"
+                            
+                            rel="noopener"
+                            title="标签"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">标签</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/flame.github.io/all-archives"
+                            
+                            rel="noopener"
+                            title="归档"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">归档</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link open-algolia-search"
+                            href="#search"
+                            
+                            rel="noopener"
+                            title="搜索"
+                        >
+                        <i class="sidebar-button-icon fa fa-search" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">搜索</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="#about"
+                            
+                            rel="noopener"
+                            title="关于"
+                        >
+                        <i class="sidebar-button-icon fa fa-question" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">关于</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://github.com/Flame0920"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="GitHub"
+                        >
+                        <i class="sidebar-button-icon fab fa-github" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">GitHub</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/flame.github.io/zhang919963919@gmail.com"
+                            
+                            rel="noopener"
+                            title="邮箱"
+                        >
+                        <i class="sidebar-button-icon fa fa-envelope" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">邮箱</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/flame.github.io/atom.xml"
+                            
+                            rel="noopener"
+                            title="RSS"
+                        >
+                        <i class="sidebar-button-icon fa fa-rss" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">RSS</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+            <div id="main" data-behavior="4"
+                 class="
+                        hasCoverMetaIn
+                        ">
+                
+<article class="post">
+    
+    
+        <div class="post-header main-content-wrap text-left">
+    
+        <h1 class="post-title">
+            InfinityHook分析
+        </h1>
+    
+    
+        <div class="post-meta">
+    <time datetime="2022-01-15T19:59:06+08:00">
+	
+		    1月 15, 2022
+    	
+    </time>
+    
+        <span>发布在 </span>
+        
+    <a class="category-link" href="/flame.github.io/categories/C-C/">C/C++</a>, <a class="category-link" href="/flame.github.io/categories/C-C/Driver/">Driver</a>
+
+
+    
+</div>
+
+    
+</div>
+
+    
+    <div class="post-content markdown">
+        <div class="main-content-wrap">
+            <p> 分析InfinityHook</p>
+<span id="more"></span>
+
+<h3 id="InfinityHook剖析"><a href="#InfinityHook剖析" class="headerlink" title="InfinityHook剖析"></a>InfinityHook剖析</h3><p>​    整体原理请看<a target="_blank" rel="noopener" href="https://bbs.pediy.com/thread-253450.htm">https://bbs.pediy.com/thread-253450.htm</a> 剖析 InfinityHook 原理 掀起一场更激烈的攻与防恶战 </p>
+<p>​    本文着重讲解这篇文章中令人疑惑的几个重点 :</p>
+<ul>
+<li>ClientContext 值分别为1、2、3时的3个不同的函数是在哪里被赋值和调用的</li>
+<li>EnableFlags 的值是如何影响ETW流程的</li>
+<li>EnableFlags  == EVENT_TRACE_FLAG_SYSTEMCALL时， 替换函数是如何定位到syscall的函数地址以及调用号</li>
+<li>扩展EnableFlags == 其他值时，如何hook</li>
+</ul>
+<p><strong>关键函数</strong></p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="function">EXTERN_C</span></span><br><span class="line"><span class="function">NTSYSCALLAPI </span></span><br><span class="line"><span class="function">NTSTATUS</span></span><br><span class="line"><span class="function">NTAPI</span></span><br><span class="line"><span class="function"><span class="title">ZwTraceControl</span> <span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">    _In_ ULONG FunctionCode,</span></span></span><br><span class="line"><span class="params"><span class="function">    _In_reads_bytes_opt_(InBufferLen) PVOID InBuffer,</span></span></span><br><span class="line"><span class="params"><span class="function">    _In_ ULONG InBufferLen,</span></span></span><br><span class="line"><span class="params"><span class="function">     _Out_writes_bytes_opt_(OutBufferLen) PVOID OutBuffer,</span></span></span><br><span class="line"><span class="params"><span class="function">    _In_ ULONG OutBufferLen,</span></span></span><br><span class="line"><span class="params"><span class="function">    _Out_ PULONG ReturnLength</span></span></span><br><span class="line"><span class="params"><span class="function">)</span></span>;</span><br></pre></td></tr></table></figure>
+
+<h3 id="1、ClientContext"><a href="#1、ClientContext" class="headerlink" title="1、ClientContext"></a>1、ClientContext</h3><p>​    当FunctionCode == EtwpStartTrace时，调用<strong>NtTraceControl</strong>，会走到<strong>EtwpStartTrace</strong>函数，其中调用了<strong>EtwpStartLogger</strong>函数，参数与<strong>EtwpStartTrace</strong>一致。</p>
+<p>​    追踪<strong>ClientContext</strong>字段：</p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116172443129.png" alt="image-20220116172443129"></p>
+<p>​    <strong>EtwpInitLoggerContext</strong> 申请了一个**_WMI_LOGGER_CONTEXT**结构的指针LoggerContext，</p>
+<p>并在接下来的过程中使得<strong>LoggerContext</strong>-&gt;ClockType = <strong>Properties</strong>-&gt;ClientContext</p>
+<p>(Properties 指针是ZwTraceControl传入的指针，详情请看文章开头的链接)</p>
+<p>​    之后调用关键函数 ： <strong>EtwpInitializeTimeStamp</strong></p>
+<p>​    <img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116173622317.png" alt="image-20220116173622317"></p>
+<p>​    在这个函数内：</p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116174711686.png"></p>
+<p>​    通过ClockType来获取相应的函数  : </p>
+<ul>
+<li><p>当ClockType = 1时， LoggerContext-&gt;GetCpuClock = <strong>PpmQueryTime</strong></p>
+</li>
+<li><p>当ClockType = 2时， LoggerContext-&gt;GetCpuClock = <strong>EtwpGetSystemTime</strong></p>
+</li>
+<li><p>当ClockType = 3时， LoggerContext-&gt;GetCpuClock = <strong>EtwpGetCycleCount</strong></p>
+</li>
+<li><p>当ClockType = 4时，如果EtwpGetHostPerfCounter能执行成功，则为EtwpGetHostPerfCounter，如果执行失败，则ClockType = 1；</p>
+<p>至此，函数赋值点以及规则弄清楚了，接下来就是搞清楚哪里调用的<strong>GetCpuClock</strong> 函数。</p>
+<p>拿syscall监控举例 : </p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117164224033.png" alt="image-20220117164224033"></p>
+</li>
+</ul>
+<p>在调用NT函数前，先调用了<strong>PerfInfoLogSysCallEntry</strong>函数：</p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117175650031.png" alt="image-20220117175650031"></p>
+<p>PerfInfoLogSysCallEntry函数中红箭头指向位置为MagicCode，可以用来标定栈的位置，以便寻找调用函数地址和调用号，具体分析在第三节。</p>
+<p>继续跟踪<strong>EtwTraceSiloKernelEvent</strong>，发现调用了<strong>EtwpLogKernelEvent</strong>函数：</p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182009670.png" alt="image-20220117182009670"></p>
+<p>跟踪<strong>EtwpLogKernelEvent</strong>函数，调用了<strong>EtwpReserveTraceBuffer</strong>函数：</p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182051726.png" alt="image-20220117182051726"></p>
+<p>在<strong>EtwpReserveTraceBuffer</strong>函数中发现：</p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182204758.png" alt="image-20220117182204758"></p>
+<p>​    此处函数调用的偏移点0x28与之前分析的赋值偏移点<strong>GetCpuClock</strong>(0x28)一致，所以此处就是<strong>GetCpuClock</strong>的调用点（这里分析结论下得比较武断，其实需要利用windbg下断点来看看是否真的一致，但是我懒了 - -）。</p>
+<p>​    此时分析的关键点变成<strong>rdi</strong>从何处来，根据IDA可知，<strong>EtwpReserveTraceBuffer</strong>中rdi = rcx，而rcx来自<strong>EtwpLogKernelEvent</strong>中mov rcx, r14。所以需要找出<strong>r14</strong>从何处来：</p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182703739.png" alt="image-20220117182703739"></p>
+<p>​    根据上图可知，r14 = [rcx + rax] = [[r12 + 0x1C8] + r15<em>8], 而在<strong>EtwpLogKernelEvent</strong>中*<em>r12 = rdx</em></em> ， rdx来自<strong>EtwTraceSiloKernelEvent</strong>函数中的：</p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182852327.png" alt="image-20220117182852327"></p>
+<p>​    r15 根据windbg逆向可得 r15 = 2（实际上R15来自<strong>EtwpLogKernelEvent</strong> 中r8，而r8的赋值比较复杂，这里简化起见直接给结论），所以最后结果就是</p>
+<p>LoggerContext = [[[<strong>EtwpHostSiloState</strong>] + 0x1C8] + 0x10]。</p>
+<p>​    根据上述结论可知，如果要替换<strong>GetCpuClock</strong>函数，则需要定位到<strong>EtwpHostSiloState</strong>，此处有个特殊的地方，根据IDA交叉引用可以看到：</p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117184204261.png" alt="image-20220117184204261"></p>
+<p>​    在一个函数中，EtwpHostSiloState被赋值：</p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117184938866.png"></p>
+<p>​    这里有两个全局变量被赋予值，<strong>qword_140429E08</strong> = [rdi + 0x1C8] , <strong>qword_140429E10</strong> = rdi通过IDA查看该值：</p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117184302975.png" alt="image-20220117184302975"></p>
+<p>​    发现全局变量 <strong>qword_140429E08</strong> - 0x10的位置有一个<strong>EtwpDebuggerData</strong>，这个可以通过特征码定位，简化寻找<strong>EtwpHostSiloState</strong>的流程（因为EtwpDebuggerData绝大部分系统都有，而EtwpHostSiloState在不同的系统名称不同）。</p>
+<p>​    所以，LoggerContext =[[[<strong>EtwpDebuggerData + 0x18</strong>] + 0x1C8] + 0x10] , 或者 LoggerContext =[[<strong>EtwpDebuggerData + 0x10</strong>] + 0x10]</p>
+
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">标签</span><br/>
+                
+    <a class="tag tag--primary tag--small t-none-link" href="/flame.github.io/tags/C-C/" rel="tag">C/C++</a> <a class="tag tag--primary tag--small t-none-link" href="/flame.github.io/tags/Driver/" rel="tag">Driver</a>
+
+            </div>
+        
+        
+            <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    <a
+                        class="post-action-btn btn btn--disabled"
+                        aria-hidden="true"
+                    >
+                        
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">上一篇</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                    data-tooltip="WRK驱动加载流程分析(下)"
+                    aria-label="下一篇: WRK驱动加载流程分析(下)"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">下一篇</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                    title="分享到 Facebook"
+                    aria-label="分享到 Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                    title="分享到 Twitter"
+                    aria-label="分享到 Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://plus.google.com/share?url=https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                    title="分享到 Google+"
+                    aria-label="分享到 Google+"
+                >
+                    <i class="fab fa-google-plus" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+        
+        
+            
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2022 BurnFlame. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+                <div id="bottom-bar" class="post-bottom-bar" data-behavior="4">
+                    <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    <a
+                        class="post-action-btn btn btn--disabled"
+                        aria-hidden="true"
+                    >
+                        
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">上一篇</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                    data-tooltip="WRK驱动加载流程分析(下)"
+                    aria-label="下一篇: WRK驱动加载流程分析(下)"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">下一篇</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                    title="分享到 Facebook"
+                    aria-label="分享到 Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                    title="分享到 Twitter"
+                    aria-label="分享到 Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://plus.google.com/share?url=https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                    title="分享到 Google+"
+                    aria-label="分享到 Google+"
+                >
+                    <i class="fab fa-google-plus" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+                </div>
+                
+    <div id="share-options-bar" class="share-options-bar" data-behavior="4">
+        <i id="btn-close-shareoptions" class="fa fa-times"></i>
+        <ul class="share-options">
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://www.facebook.com/sharer/sharer.php?u=https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                        aria-label="分享到 Facebook"
+                    >
+                        <i class="fab fa-facebook" aria-hidden="true"></i><span>分享到 Facebook</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://twitter.com/intent/tweet?text=https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                        aria-label="分享到 Twitter"
+                    >
+                        <i class="fab fa-twitter" aria-hidden="true"></i><span>分享到 Twitter</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://plus.google.com/share?url=https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                        aria-label="分享到 Google+"
+                    >
+                        <i class="fab fa-google-plus" aria-hidden="true"></i><span>分享到 Google+</span>
+                    </a>
+                </li>
+            
+        </ul>
+    </div>
+
+
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/flame.github.io/assets/images/image_touxiang.jpg" alt="作者的图片"/>
+        
+            <h4 id="about-card-name">BurnFlame</h4>
+        
+            <div id="about-card-bio"><p>author.bio</p>
+</div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                <p>author.job</p>
+
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Mars
+            </div>
+        
+    </div>
+</div>
+
+        
+            <div id="algolia-search-modal" class="modal-container">
+    <div class="modal">
+        <div class="modal-header">
+            <span class="close-button"><i class="fa fa-times"></i></span>
+            <a href="https://algolia.com" target="_blank" rel="noopener" class="searchby-algolia text-color-light link-unstyled">
+                <span class="searchby-algolia-text text-color-light text-small">by</span>
+                <img class="searchby-algolia-logo" src="/flame.github.io/assets/images/logo-algolia-nebula-blue-full.svg">
+            </a>
+            <i class="search-icon fa fa-search"></i>
+            <form id="algolia-search-form">
+                <input type="text" id="algolia-search-input" name="search"
+                    class="form-control input--large search-input" placeholder="Search "
+                    />
+            </form>
+        </div>
+        <div class="modal-body">
+            <div class="no-result text-color-light text-center">没有找到文章</div>
+            <div class="results">
+                
+                <div class="media">
+                    
+                    <div class="media-left">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/"
+                            aria-label=": WRK驱动加载流程分析(上)"
+                        >
+                            <img class="media-image" src="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/image_1.jpg" width="90" height="90"/>
+                        </a>
+                    </div>
+                    
+                    <div class="media-body">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/"
+                            aria-label=": WRK驱动加载流程分析(上)"
+                        >
+                            <h3 class="media-heading">WRK驱动加载流程分析(上)</h3>
+                        </a>
+                        <span class="media-meta">
+                            <span class="media-date text-small">
+                                
+                                    2021年11月16日
+                                
+                            </span>
+                        </span>
+                        <div class="media-content hide-xs font-merryweather"><p> 分析驱动加载中的关键函数(上篇)</p></div>
+                    </div>
+                    <div style="clear:both;"></div>
+                    <hr>
+                </div>
+                
+                <div class="media">
+                    
+                    <div class="media-left">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/"
+                            aria-label=": WRK驱动加载流程分析(中)"
+                        >
+                            <img class="media-image" src="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/image_1.jpg" width="90" height="90"/>
+                        </a>
+                    </div>
+                    
+                    <div class="media-body">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/"
+                            aria-label=": WRK驱动加载流程分析(中)"
+                        >
+                            <h3 class="media-heading">WRK驱动加载流程分析(中)</h3>
+                        </a>
+                        <span class="media-meta">
+                            <span class="media-date text-small">
+                                
+                                    2021年11月17日
+                                
+                            </span>
+                        </span>
+                        <div class="media-content hide-xs font-merryweather"><p> 分析驱动加载中的关键函数(中篇) — 分析 MmLoadSystemImage</p></div>
+                    </div>
+                    <div style="clear:both;"></div>
+                    <hr>
+                </div>
+                
+                <div class="media">
+                    
+                    <div class="media-body">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                            aria-label=": WRK驱动加载流程分析(下)"
+                        >
+                            <h3 class="media-heading">WRK驱动加载流程分析(下)</h3>
+                        </a>
+                        <span class="media-meta">
+                            <span class="media-date text-small">
+                                
+                                    2021年11月17日
+                                
+                            </span>
+                        </span>
+                        <div class="media-content hide-xs font-merryweather"></div>
+                    </div>
+                    <div style="clear:both;"></div>
+                    <hr>
+                </div>
+                
+                <div class="media">
+                    
+                    <div class="media-body">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                            aria-label=": InfinityHook分析"
+                        >
+                            <h3 class="media-heading">InfinityHook分析</h3>
+                        </a>
+                        <span class="media-meta">
+                            <span class="media-date text-small">
+                                
+                                    2022年1月15日
+                                
+                            </span>
+                        </span>
+                        <div class="media-content hide-xs font-merryweather"><p> 分析InfinityHook</p></div>
+                    </div>
+                    <div style="clear:both;"></div>
+                    <hr>
+                </div>
+                
+            </div>
+        </div>
+        <div class="modal-footer">
+            <p class="results-count text-medium"
+                data-message-zero="没有找到文章"
+                data-message-one="找到 1 篇文章"
+                data-message-other="找到 {n} 篇文章">
+                找到 4 篇文章
+            </p>
+        </div>
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/flame.github.io/assets/images/cover.jpg');"></div>
+        <!--SCRIPTS-->
+
+<script src="/flame.github.io/assets/js/script-mosusumf5fqlcn7wgpgrqqha8jzxyrqoyzx05l7hglx8jktqu3y1jgo5vc3f.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+    
+
+
+
+    
+<script src="/flame.github.io/assets/js/moment-with-locales.js"></script>
+
+    
+<script src="/flame.github.io/assets/js/algoliasearch.js"></script>
+
+    <script>
+      var algoliaClient = algoliasearch('EDNF6QBKHC', '9898a7fa6b2df0f3a83a170d1207e72a');
+      var algoliaIndex = algoliaClient.initIndex('my-hexo-blog');
+    </script>
+
+
+    </body>
+</html>

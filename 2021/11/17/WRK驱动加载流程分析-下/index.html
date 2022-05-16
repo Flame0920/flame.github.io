@@ -6,7 +6,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="generator" content="Flame&#39;s Security Home">
-    <title>标签: Driver - Flame&#39;s Security Home</title>
+    <title>WRK驱动加载流程分析(下) - Flame&#39;s Security Home</title>
     <meta name="author" content="BurnFlame">
     
     
@@ -15,12 +15,14 @@
             <link rel="alternate" type="application/atom+xml" title="RSS" href="/flame.github.io/atom.xml">
         
     
-    <script type="application/ld+json">{}</script>
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg"},"articleBody":"","dateCreated":"2021-11-17T21:15:21+08:00","dateModified":"2021-11-17T21:15:21+08:00","datePublished":"2021-11-17T21:15:21+08:00","description":"","headline":"WRK驱动加载流程分析(下)","image":[],"mainEntityOfPage":{"@type":"WebPage","@id":"https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"},"publisher":{"@type":"Organization","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg","logo":{"@type":"ImageObject","url":"image_touxiang.jpg"}},"url":"https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"}</script>
     <meta property="og:type" content="blog">
-<meta property="og:title" content="Flame&#39;s Security Home">
-<meta property="og:url" content="https://flame0920.github.io/flame.github.io/tags/Driver/index.html">
+<meta property="og:title" content="WRK驱动加载流程分析(下)">
+<meta property="og:url" content="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/index.html">
 <meta property="og:site_name" content="Flame&#39;s Security Home">
 <meta property="og:locale" content="zh_CN">
+<meta property="article:published_time" content="2021-11-17T13:15:21.000Z">
+<meta property="article:modified_time" content="2021-11-17T13:15:21.782Z">
 <meta property="article:author" content="BurnFlame">
 <meta name="twitter:card" content="summary">
     
@@ -43,6 +45,8 @@
     
 
     
+        
+    
 </head>
 
     <body>
@@ -56,7 +60,7 @@
         
     
 
-<header id="header" data-behavior="1">
+<header id="header" data-behavior="4">
     <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
     <div class="header-title">
         <a
@@ -89,7 +93,7 @@
         
     
 
-<nav id="sidebar" data-behavior="1">
+<nav id="sidebar" data-behavior="4">
     <div class="sidebar-container">
         
             <div class="sidebar-profile">
@@ -251,195 +255,149 @@
 </nav>
 
             
-            <div id="main" data-behavior="1"
+            <div id="main" data-behavior="4"
                  class="
                         hasCoverMetaIn
                         ">
                 
-    <section class="postShorten-group main-content-wrap">
+<article class="post">
     
     
-    <article class="postShorten postShorten--thumbnailimg-right">
-        <div class="postShorten-wrap">
-            
-            <div class="postShorten-header">
-                <h1 class="postShorten-title">
-                    
-                        <a
-                            class="link-unstyled"
-                            href="/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
-                            aria-label=": InfinityHook分析"
-                        >
-                            InfinityHook分析
-                        </a>
-                    
-                </h1>
-                <div class="postShorten-meta">
-    <time datetime="2022-01-15T19:59:06+08:00">
-	
-		    1月 15, 2022
-    	
-    </time>
+        <div class="post-header main-content-wrap text-left">
     
-        <span>发布在 </span>
-        
-    <a class="category-link" href="/flame.github.io/categories/C-C/">C/C++</a>, <a class="category-link" href="/flame.github.io/categories/C-C/Driver/">Driver</a>
-
-
-    
-</div>
-
-            </div>
-            
-                <div class="postShorten-excerpt">
-                    <p> 分析InfinityHook</p>
-                    
-                        <a
-                            href="/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
-                            class="postShorten-excerpt_link link"
-                            aria-label=": InfinityHook分析"
-                        >
-                            阅读全文
-                        </a>
-                        
-                    
-                </div>
-            
-        </div>
-        
-    </article>
+        <h1 class="post-title">
+            WRK驱动加载流程分析(下)
+        </h1>
     
     
-    <article class="postShorten postShorten--thumbnailimg-left">
-        <div class="postShorten-wrap">
-            
-            <div class="postShorten-header">
-                <h1 class="postShorten-title">
-                    
-                        <a
-                            class="link-unstyled"
-                            href="/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/"
-                            aria-label=": WRK驱动加载流程分析(中)"
-                        >
-                            WRK驱动加载流程分析(中)
-                        </a>
-                    
-                </h1>
-                <div class="postShorten-meta">
-    <time datetime="2021-11-17T21:15:15+08:00">
+        <div class="post-meta">
+    <time datetime="2021-11-17T21:15:21+08:00">
 	
 		    11月 17, 2021
     	
     </time>
     
-        <span>发布在 </span>
-        
-    <a class="category-link" href="/flame.github.io/categories/C-C/">C/C++</a>, <a class="category-link" href="/flame.github.io/categories/C-C/Driver/">Driver</a>, <a class="category-link" href="/flame.github.io/categories/C-C/Driver/WRK/">WRK</a>
-
+</div>
 
     
 </div>
 
-            </div>
+    
+    <div class="post-content markdown">
+        <div class="main-content-wrap">
             
-                <div class="postShorten-excerpt">
-                    <p> 分析驱动加载中的关键函数(中篇) — 分析 MmLoadSystemImage</p>
-                    
-                        <a
-                            href="/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/"
-                            class="postShorten-excerpt_link link"
-                            aria-label=": WRK驱动加载流程分析(中)"
-                        >
-                            阅读全文
-                        </a>
-                        
-                    
-                </div>
             
+
+
         </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
         
+        
+            <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                    data-tooltip="InfinityHook分析"
+                    aria-label="上一篇: InfinityHook分析"
+                >
+                    
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">上一篇</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/"
+                    data-tooltip="WRK驱动加载流程分析(中)"
+                    aria-label="下一篇: WRK驱动加载流程分析(中)"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">下一篇</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
             <a
-                href="/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/"
-                aria-label=": WRK驱动加载流程分析(中)"
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
             >
-                <div class="postShorten-thumbnailimg">
-                    <img alt="" src="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/image_1.jpg"/>
-                </div>
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
             </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                    title="分享到 Facebook"
+                    aria-label="分享到 Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                    title="分享到 Twitter"
+                    aria-label="分享到 Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://plus.google.com/share?url=https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                    title="分享到 Google+"
+                    aria-label="分享到 Google+"
+                >
+                    <i class="fab fa-google-plus" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
             
         
-    </article>
-    
-    
-    <article class="postShorten postShorten--thumbnailimg-left">
-        <div class="postShorten-wrap">
+        <li class="post-action">
             
-            <div class="postShorten-header">
-                <h1 class="postShorten-title">
-                    
-                        <a
-                            class="link-unstyled"
-                            href="/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/"
-                            aria-label=": WRK驱动加载流程分析(上)"
-                        >
-                            WRK驱动加载流程分析(上)
-                        </a>
-                    
-                </h1>
-                <div class="postShorten-meta">
-    <time datetime="2021-11-16T18:45:30+08:00">
-	
-		    11月 16, 2021
-    	
-    </time>
-    
-        <span>发布在 </span>
-        
-    <a class="category-link" href="/flame.github.io/categories/C-C/">C/C++</a>, <a class="category-link" href="/flame.github.io/categories/C-C/Driver/">Driver</a>, <a class="category-link" href="/flame.github.io/categories/C-C/Driver/WRK/">WRK</a>
-
-
-    
-</div>
-
-            </div>
+                <a class="post-action-btn btn btn--default" href="#" aria-label="Back to top">
             
-                <div class="postShorten-excerpt">
-                    <p> 分析驱动加载中的关键函数(上篇)</p>
-                    
-                        <a
-                            href="/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/"
-                            class="postShorten-excerpt_link link"
-                            aria-label=": WRK驱动加载流程分析(上)"
-                        >
-                            阅读全文
-                        </a>
-                        
-                    
-                </div>
-            
-        </div>
-        
-            <a
-                href="/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/"
-                aria-label=": WRK驱动加载流程分析(上)"
-            >
-                <div class="postShorten-thumbnailimg">
-                    <img alt="" src="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/image_1.jpg"/>
-                </div>
+                <i class="fa fa-list" aria-hidden="true"></i>
             </a>
-            
-        
-    </article>
-    
-    <div class="pagination-bar">
-    <ul class="pagination">
-        
-        
-        <li class="pagination-number">第 1 页 共 1 页</li>
+        </li>
     </ul>
 </div>
 
-</section>
+
+        
+        
+            
+        
+    </div>
+</article>
+
 
 
                 <footer id="footer" class="main-content-wrap">
@@ -449,6 +407,154 @@
 </footer>
 
             </div>
+            
+                <div id="bottom-bar" class="post-bottom-bar" data-behavior="4">
+                    <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                    data-tooltip="InfinityHook分析"
+                    aria-label="上一篇: InfinityHook分析"
+                >
+                    
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">上一篇</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/"
+                    data-tooltip="WRK驱动加载流程分析(中)"
+                    aria-label="下一篇: WRK驱动加载流程分析(中)"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">下一篇</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                    title="分享到 Facebook"
+                    aria-label="分享到 Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                    title="分享到 Twitter"
+                    aria-label="分享到 Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://plus.google.com/share?url=https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                    title="分享到 Google+"
+                    aria-label="分享到 Google+"
+                >
+                    <i class="fab fa-google-plus" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+                </div>
+                
+    <div id="share-options-bar" class="share-options-bar" data-behavior="4">
+        <i id="btn-close-shareoptions" class="fa fa-times"></i>
+        <ul class="share-options">
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://www.facebook.com/sharer/sharer.php?u=https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                        aria-label="分享到 Facebook"
+                    >
+                        <i class="fab fa-facebook" aria-hidden="true"></i><span>分享到 Facebook</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://twitter.com/intent/tweet?text=https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                        aria-label="分享到 Twitter"
+                    >
+                        <i class="fab fa-twitter" aria-hidden="true"></i><span>分享到 Twitter</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://plus.google.com/share?url=https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                        aria-label="分享到 Google+"
+                    >
+                        <i class="fab fa-google-plus" aria-hidden="true"></i><span>分享到 Google+</span>
+                    </a>
+                </li>
+            
+        </ul>
+    </div>
+
+
             
         </div>
         
@@ -643,6 +749,8 @@
 
 <!--SCRIPTS END-->
 
+
+    
 
 
 

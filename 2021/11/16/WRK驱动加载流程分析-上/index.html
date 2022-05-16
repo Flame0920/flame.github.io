@@ -6,10 +6,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="generator" content="Flame&#39;s Security Home">
-    <title>WRK驱动加载流程分析 - Flame&#39;s Security Home</title>
+    <title>WRK驱动加载流程分析(上) - Flame&#39;s Security Home</title>
     <meta name="author" content="BurnFlame">
     
-        <meta name="keywords" content="javascript,hexo">
+        <meta name="keywords" content="WRK,LoadDriver">
     
     
     
@@ -17,19 +17,20 @@
             <link rel="alternate" type="application/atom+xml" title="RSS" href="/flame.github.io/atom.xml">
         
     
-    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg"},"articleBody":" 分析驱动加载中的关键函数\n\n\n驱动加载中的关键函数\nNtLoadDriver\nIopLoadUnloadDriver\nIopLoadDriver\nMmLoadSystemImage\nIopPrepareDriverLoading\n\n\nIopCallDriverReinitializationRoutines\n\n\n\n\n\n关键函数分析NtLoadDriver12345678910111213141516171819NTSTATUSNtLoadDriver(    IN PUNICODE_STRING DriverServiceName    )&#123;    // 1、判断是否是用户模式调用    // 2、如果是用户模式调用，则检查DriverServiceName    // 3、初始化LOAD_PACKET    // 4、判断是否是系统线程，如果是系统线程则直接调用IopLoadUnloadDriver    if (PsGetCurrentProcessByThread(CurrentThread) == PsInitialSystemProcess) &#123;        IopLoadUnloadDriver(&amp;loadPacket);    // 系统线程，直接调用    &#125;    else    &#123;        // 5、如果不是系统线程，则是指工作环境，并等待    &#125;        // 6、返回status&#125;\n\n\n\nIopLoadUnloadDriver1234VOIDIopLoadUnloadDriver(    IN PVOID Parameter    );\n\n1、如果存在DriverObject 则调用DriverUnload\n12345if (loadPacket-&gt;DriverObject) &#123;        loadPacket-&gt;DriverObject-&gt;DriverUnload( loadPacket-&gt;DriverObject );    status = STATUS_SUCCESS;&#125;\n\n2、loadPacket-&gt;DriverObject == nullptr, 则说明是加载驱动\n3、IopOpenRegistryKey 打开注册表Key\n4、如果IopOpenRegistryKeyIopLoadDriver成功，则调用 IopLoadDriver\n5、判断IopLoadDriver调用结果\n6、IopCallDriverReinitializationRoutines();\nIopLoadDriver1234567NTSTATUSIopLoadDriver(    IN  HANDLE      KeyHandle,    IN  BOOLEAN     CheckForSafeBoot,    IN  BOOLEAN     IsFilter,    OUT NTSTATUS   *DriverEntryStatus    );\n\n1、根据注册标键拿到驱动程序的全路径名\n2、在PsLoadedModuleList里寻找是否驱动已经加载\n3、MmLoadSystemImage加载（将驱动程序加载到系统地址空间）\n4、IopPrepareDriverLoading （具体操作再分析）  // win10 是PnpPrepareDriverLoading\n5、创建DriverObject\n6、初始化DriverObject域， （重点DriverObject-&gt;DriverInit = (PDRIVER_INITIALIZE) entryPoint）\n7、插入DriverObject到句柄表\n8、初始化 DriverObject-&gt;DriverName   DriverObject-&gt;DriverExtension-&gt;ServiceKeyName\n9、DriverObject-&gt;DriverInit( DriverObject, &amp;registryPath-&gt;Name ); 调用DriverEntry\n10、为未设置的MajorFunction设置IRP函数 : IopInvalidDeviceRequest;\n11、IopReadyDeviceObjects ：将DeviceObject DO_DEVICE_INITIALIZING标志清理掉\nMmLoadSystemImage123456789NTSTATUSMmLoadSystemImage (    IN PUNICODE_STRING ImageFileName,    IN PUNICODE_STRING NamePrefix OPTIONAL,    IN PUNICODE_STRING LoadedBaseName OPTIONAL,    IN ULONG LoadFlags,    OUT PVOID *ImageHandle,    OUT PVOID *ImageBaseAddress    );\n\n","dateCreated":"2021-11-16T18:45:30+08:00","dateModified":"2021-11-16T19:35:09+08:00","datePublished":"2021-11-16T18:45:30+08:00","description":" 分析驱动加载中的关键函数","headline":"WRK驱动加载流程分析","image":["image_1.jpg","image_2.jpg"],"mainEntityOfPage":{"@type":"WebPage","@id":"https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90/"},"publisher":{"@type":"Organization","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg","logo":{"@type":"ImageObject","url":"image_touxiang.jpg"}},"url":"https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90/","keywords":"Driver, C/C++","thumbnailUrl":"image_1.jpg"}</script>
-    <meta name="description" content="分析驱动加载中的关键函数">
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg"},"articleBody":" 分析驱动加载中的关键函数(上篇)\n\n\n驱动加载中的关键函数\nNtLoadDriver\nIopLoadUnloadDriver\nIopLoadDriver\nMmLoadSystemImage\nIopPrepareDriverLoading\n\n\nIopCallDriverReinitializationRoutines\n\n\n\n\n\n关键函数分析NtLoadDriver1234NTSTATUSNtLoadDriver(    IN PUNICODE_STRING DriverServiceName    );\n\n1、判断是否是用户模式调用\n2、如果是用户模式调用，则检查DriverServiceName\n3、初始化LOAD_PACKET\n4、判断是否是系统线程，如果是系统线程则直接调用IopLoadUnloadDriver\n123if (PsGetCurrentProcessByThread(CurrentThread) == PsInitialSystemProcess) &#123;    IopLoadUnloadDriver(&amp;loadPacket);    // 系统线程，直接调用&#125;\n\n5、如果不是系统线程，则是指工作环境，并等待\n6、返回status\nIopLoadUnloadDriver1234VOIDIopLoadUnloadDriver(    IN PVOID Parameter    );\n\n1、如果存在DriverObject 则调用DriverUnload\n12345if (loadPacket-&gt;DriverObject) &#123;        loadPacket-&gt;DriverObject-&gt;DriverUnload( loadPacket-&gt;DriverObject );    status = STATUS_SUCCESS;&#125;\n\n2、loadPacket-&gt;DriverObject == nullptr, 则说明是加载驱动\n3、IopOpenRegistryKey 打开注册表Key\n4、如果IopOpenRegistryKeyIopLoadDriver成功，则调用 IopLoadDriver\n5、判断IopLoadDriver调用结果\n6、IopCallDriverReinitializationRoutines();\nIopLoadDriver1234567NTSTATUSIopLoadDriver(    IN  HANDLE      KeyHandle,    IN  BOOLEAN     CheckForSafeBoot,    IN  BOOLEAN     IsFilter,    OUT NTSTATUS   *DriverEntryStatus    );\n\n1、根据注册标键拿到驱动程序的全路径名\n2、在PsLoadedModuleList里寻找是否驱动已经加载\n3、MmLoadSystemImage加载（将驱动程序加载到系统地址空间）\n4、IopPrepareDriverLoading （具体操作再分析）  // win10 是PnpPrepareDriverLoading\n5、通过ObCreateObject创建DriverObject\n6、初始化DriverObject域， （重点DriverObject-&gt;DriverInit = (PDRIVER_INITIALIZE) entryPoint）\n7、插入DriverObject到句柄表\n8、初始化 DriverObject-&gt;DriverName   DriverObject-&gt;DriverExtension-&gt;ServiceKeyName\n9、DriverObject-&gt;DriverInit( DriverObject, &amp;registryPath-&gt;Name ); 调用DriverEntry\n10、为未设置的MajorFunction设置IRP函数 : IopInvalidDeviceRequest;\n11、IopReadyDeviceObjects ：将DeviceObject DO_DEVICE_INITIALIZING标志清理掉\n","dateCreated":"2021-11-16T18:45:30+08:00","dateModified":"2021-11-17T21:16:40+08:00","datePublished":"2021-11-16T18:45:30+08:00","description":" 分析驱动加载中的关键函数(上篇)","headline":"WRK驱动加载流程分析(上)","image":["image_1.jpg","image_2.jpg"],"mainEntityOfPage":{"@type":"WebPage","@id":"https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/"},"publisher":{"@type":"Organization","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg","logo":{"@type":"ImageObject","url":"image_touxiang.jpg"}},"url":"https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/","keywords":"Driver, C/C++, WRK","thumbnailUrl":"image_1.jpg"}</script>
+    <meta name="description" content="分析驱动加载中的关键函数(上篇)">
 <meta property="og:type" content="blog">
-<meta property="og:title" content="WRK驱动加载流程分析">
-<meta property="og:url" content="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90/index.html">
+<meta property="og:title" content="WRK驱动加载流程分析(上)">
+<meta property="og:url" content="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/index.html">
 <meta property="og:site_name" content="Flame&#39;s Security Home">
-<meta property="og:description" content="分析驱动加载中的关键函数">
+<meta property="og:description" content="分析驱动加载中的关键函数(上篇)">
 <meta property="og:locale" content="zh_CN">
 <meta property="article:published_time" content="2021-11-16T10:45:30.000Z">
-<meta property="article:modified_time" content="2021-11-16T11:35:09.749Z">
+<meta property="article:modified_time" content="2021-11-17T13:16:40.087Z">
 <meta property="article:author" content="BurnFlame">
 <meta property="article:tag" content="Driver">
 <meta property="article:tag" content="C&#x2F;C++">
+<meta property="article:tag" content="WRK">
 <meta name="twitter:card" content="summary">
     
     
@@ -39,12 +40,12 @@
         <meta property="og:image" content="https://flame0920.github.io/flame.github.io/assets/images/image_touxiang.jpg"/>
     
     
-        <meta property="og:image" content="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90/image_1.jpg"/>
-        <meta class="swiftype" name="image" data-type="enum" content="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90/image_1.jpg"/>
+        <meta property="og:image" content="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/image_1.jpg"/>
+        <meta class="swiftype" name="image" data-type="enum" content="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/image_1.jpg"/>
     
     
-        <meta property="og:image" content="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90/image_2.jpg"/>
-        <meta class="swiftype" name="image" data-type="enum" content="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90/image_2.jpg"/>
+        <meta property="og:image" content="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/image_2.jpg"/>
+        <meta class="swiftype" name="image" data-type="enum" content="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/image_2.jpg"/>
     
     
     <!--STYLES-->
@@ -268,13 +269,13 @@
         <div class="post-header-cover
                     text-center
                     post-header-cover--partial"
-             style="background-image:url('/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90/image_2.jpg');"
+             style="background-image:url('/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/image_2.jpg');"
              data-behavior="4">
             
                 <div class="post-header main-content-wrap text-center">
     
         <h1 class="post-title">
-            WRK驱动加载流程分析
+            WRK驱动加载流程分析(上)
         </h1>
     
     
@@ -290,12 +291,12 @@
                 
 <article class="post">
     
-        <span class="post-header-cover-caption caption">WRK驱动加载流程分析</span>
+        <span class="post-header-cover-caption caption">WRK驱动加载流程分析(上)</span>
     
     
     <div class="post-content markdown">
         <div class="main-content-wrap">
-            <p> 分析驱动加载中的关键函数</p>
+            <p> 分析驱动加载中的关键函数(上篇)</p>
 <span id="more"></span>
 
 <h3 id="驱动加载中的关键函数"><a href="#驱动加载中的关键函数" class="headerlink" title="驱动加载中的关键函数"></a>驱动加载中的关键函数</h3><ul>
@@ -312,10 +313,16 @@
 </ul>
 </li>
 </ul>
-<h3 id="关键函数分析"><a href="#关键函数分析" class="headerlink" title="关键函数分析"></a>关键函数分析</h3><h4 id="NtLoadDriver"><a href="#NtLoadDriver" class="headerlink" title="NtLoadDriver"></a>NtLoadDriver</h4><figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="function">NTSTATUS</span></span><br><span class="line"><span class="function"><span class="title">NtLoadDriver</span><span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">    IN PUNICODE_STRING DriverServiceName</span></span></span><br><span class="line"><span class="params"><span class="function">    )</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    <span class="comment">// 1、判断是否是用户模式调用</span></span><br><span class="line">    <span class="comment">// 2、如果是用户模式调用，则检查DriverServiceName</span></span><br><span class="line">    <span class="comment">// 3、初始化LOAD_PACKET</span></span><br><span class="line">    <span class="comment">// 4、判断是否是系统线程，如果是系统线程则直接调用IopLoadUnloadDriver</span></span><br><span class="line">    <span class="keyword">if</span> (<span class="built_in">PsGetCurrentProcessByThread</span>(CurrentThread) == PsInitialSystemProcess) &#123;</span><br><span class="line">        <span class="built_in">IopLoadUnloadDriver</span>(&amp;loadPacket);    <span class="comment">// 系统线程，直接调用</span></span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">else</span></span><br><span class="line">    &#123;</span><br><span class="line">        <span class="comment">// 5、如果不是系统线程，则是指工作环境，并等待</span></span><br><span class="line">    &#125;</span><br><span class="line">    </span><br><span class="line">    <span class="comment">// 6、返回status</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h3 id="关键函数分析"><a href="#关键函数分析" class="headerlink" title="关键函数分析"></a>关键函数分析</h3><h4 id="NtLoadDriver"><a href="#NtLoadDriver" class="headerlink" title="NtLoadDriver"></a>NtLoadDriver</h4><figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="function">NTSTATUS</span></span><br><span class="line"><span class="function"><span class="title">NtLoadDriver</span><span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">    IN PUNICODE_STRING DriverServiceName</span></span></span><br><span class="line"><span class="params"><span class="function">    )</span></span>;</span><br></pre></td></tr></table></figure>
 
+<p>1、判断是否是用户模式调用</p>
+<p>2、如果是用户模式调用，则检查DriverServiceName</p>
+<p>3、初始化LOAD_PACKET</p>
+<p>4、判断是否是系统线程，如果是系统线程则直接调用IopLoadUnloadDriver</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (<span class="built_in">PsGetCurrentProcessByThread</span>(CurrentThread) == PsInitialSystemProcess) &#123;</span><br><span class="line">    <span class="built_in">IopLoadUnloadDriver</span>(&amp;loadPacket);    <span class="comment">// 系统线程，直接调用</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-
+<p>5、如果不是系统线程，则是指工作环境，并等待</p>
+<p>6、返回status</p>
 <h4 id="IopLoadUnloadDriver"><a href="#IopLoadUnloadDriver" class="headerlink" title="IopLoadUnloadDriver"></a>IopLoadUnloadDriver</h4><figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="function">VOID</span></span><br><span class="line"><span class="function"><span class="title">IopLoadUnloadDriver</span><span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">    IN PVOID Parameter</span></span></span><br><span class="line"><span class="params"><span class="function">    )</span></span>;</span><br></pre></td></tr></table></figure>
 
 <p>1、如果存在DriverObject 则调用DriverUnload</p>
@@ -332,15 +339,13 @@
 <p>2、在<strong>PsLoadedModuleList</strong>里寻找是否驱动已经加载</p>
 <p>3、<strong>MmLoadSystemImage</strong>加载（将驱动程序加载到系统地址空间）</p>
 <p>4、<strong>IopPrepareDriverLoading</strong> （具体操作再分析）  // win10 是<strong>PnpPrepareDriverLoading</strong></p>
-<p>5、创建DriverObject</p>
+<p>5、通过<strong>ObCreateObject</strong>创建<strong>DriverObject</strong></p>
 <p>6、初始化DriverObject域， （重点DriverObject-&gt;DriverInit = (PDRIVER_INITIALIZE) entryPoint）</p>
 <p>7、插入DriverObject到句柄表</p>
 <p>8、初始化 DriverObject-&gt;DriverName   DriverObject-&gt;DriverExtension-&gt;ServiceKeyName</p>
 <p>9、DriverObject-&gt;DriverInit( DriverObject, &amp;registryPath-&gt;Name ); 调用<strong>DriverEntry</strong></p>
 <p>10、为未设置的MajorFunction设置IRP函数 : <strong>IopInvalidDeviceRequest</strong>;</p>
 <p>11、<strong>IopReadyDeviceObjects</strong> ：将DeviceObject DO_DEVICE_INITIALIZING标志清理掉</p>
-<h4 id="MmLoadSystemImage"><a href="#MmLoadSystemImage" class="headerlink" title="MmLoadSystemImage"></a>MmLoadSystemImage</h4><figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="function">NTSTATUS</span></span><br><span class="line"><span class="function"><span class="title">MmLoadSystemImage</span> <span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">    IN PUNICODE_STRING ImageFileName,</span></span></span><br><span class="line"><span class="params"><span class="function">    IN PUNICODE_STRING NamePrefix OPTIONAL,</span></span></span><br><span class="line"><span class="params"><span class="function">    IN PUNICODE_STRING LoadedBaseName OPTIONAL,</span></span></span><br><span class="line"><span class="params"><span class="function">    IN ULONG LoadFlags,</span></span></span><br><span class="line"><span class="params"><span class="function">    OUT PVOID *ImageHandle,</span></span></span><br><span class="line"><span class="params"><span class="function">    OUT PVOID *ImageBaseAddress</span></span></span><br><span class="line"><span class="params"><span class="function">    )</span></span>;</span><br></pre></td></tr></table></figure>
-
 
             
 
@@ -352,7 +357,7 @@
             <div class="post-footer-tags">
                 <span class="text-color-light text-small">标签</span><br/>
                 
-    <a class="tag tag--primary tag--small t-none-link" href="/flame.github.io/tags/C-C/" rel="tag">C/C++</a> <a class="tag tag--primary tag--small t-none-link" href="/flame.github.io/tags/Driver/" rel="tag">Driver</a>
+    <a class="tag tag--primary tag--small t-none-link" href="/flame.github.io/tags/C-C/" rel="tag">C/C++</a> <a class="tag tag--primary tag--small t-none-link" href="/flame.github.io/tags/Driver/" rel="tag">Driver</a> <a class="tag tag--primary tag--small t-none-link" href="/flame.github.io/tags/WRK/" rel="tag">WRK</a>
 
             </div>
         
@@ -365,7 +370,7 @@
 
                 <footer id="footer" class="main-content-wrap">
     <span class="copyrights">
-        Copyrights &copy; 2021 BurnFlame. All Rights Reserved.
+        Copyrights &copy; 2022 BurnFlame. All Rights Reserved.
     </span>
 </footer>
 
@@ -435,20 +440,20 @@
                     <div class="media-left">
                         <a
                             class="link-unstyled"
-                            href="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90/"
-                            aria-label=": WRK驱动加载流程分析"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/"
+                            aria-label=": WRK驱动加载流程分析(上)"
                         >
-                            <img class="media-image" src="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90/image_1.jpg" width="90" height="90"/>
+                            <img class="media-image" src="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/image_1.jpg" width="90" height="90"/>
                         </a>
                     </div>
                     
                     <div class="media-body">
                         <a
                             class="link-unstyled"
-                            href="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90/"
-                            aria-label=": WRK驱动加载流程分析"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/16/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8A/"
+                            aria-label=": WRK驱动加载流程分析(上)"
                         >
-                            <h3 class="media-heading">WRK驱动加载流程分析</h3>
+                            <h3 class="media-heading">WRK驱动加载流程分析(上)</h3>
                         </a>
                         <span class="media-meta">
                             <span class="media-date text-small">
@@ -457,7 +462,86 @@
                                 
                             </span>
                         </span>
-                        <div class="media-content hide-xs font-merryweather"><p> 分析驱动加载中的关键函数</p></div>
+                        <div class="media-content hide-xs font-merryweather"><p> 分析驱动加载中的关键函数(上篇)</p></div>
+                    </div>
+                    <div style="clear:both;"></div>
+                    <hr>
+                </div>
+                
+                <div class="media">
+                    
+                    <div class="media-left">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/"
+                            aria-label=": WRK驱动加载流程分析(中)"
+                        >
+                            <img class="media-image" src="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/image_1.jpg" width="90" height="90"/>
+                        </a>
+                    </div>
+                    
+                    <div class="media-body">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%AD/"
+                            aria-label=": WRK驱动加载流程分析(中)"
+                        >
+                            <h3 class="media-heading">WRK驱动加载流程分析(中)</h3>
+                        </a>
+                        <span class="media-meta">
+                            <span class="media-date text-small">
+                                
+                                    2021年11月17日
+                                
+                            </span>
+                        </span>
+                        <div class="media-content hide-xs font-merryweather"><p> 分析驱动加载中的关键函数(中篇) — 分析 MmLoadSystemImage</p></div>
+                    </div>
+                    <div style="clear:both;"></div>
+                    <hr>
+                </div>
+                
+                <div class="media">
+                    
+                    <div class="media-body">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2021/11/17/WRK%E9%A9%B1%E5%8A%A8%E5%8A%A0%E8%BD%BD%E6%B5%81%E7%A8%8B%E5%88%86%E6%9E%90-%E4%B8%8B/"
+                            aria-label=": WRK驱动加载流程分析(下)"
+                        >
+                            <h3 class="media-heading">WRK驱动加载流程分析(下)</h3>
+                        </a>
+                        <span class="media-meta">
+                            <span class="media-date text-small">
+                                
+                                    2021年11月17日
+                                
+                            </span>
+                        </span>
+                        <div class="media-content hide-xs font-merryweather"></div>
+                    </div>
+                    <div style="clear:both;"></div>
+                    <hr>
+                </div>
+                
+                <div class="media">
+                    
+                    <div class="media-body">
+                        <a
+                            class="link-unstyled"
+                            href="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"
+                            aria-label=": InfinityHook分析"
+                        >
+                            <h3 class="media-heading">InfinityHook分析</h3>
+                        </a>
+                        <span class="media-meta">
+                            <span class="media-date text-small">
+                                
+                                    2022年1月15日
+                                
+                            </span>
+                        </span>
+                        <div class="media-content hide-xs font-merryweather"><p> 分析InfinityHook</p></div>
                     </div>
                     <div style="clear:both;"></div>
                     <hr>
@@ -470,7 +554,7 @@
                 data-message-zero="没有找到文章"
                 data-message-one="找到 1 篇文章"
                 data-message-other="找到 {n} 篇文章">
-                找到 1 篇文章
+                找到 4 篇文章
             </p>
         </div>
     </div>
