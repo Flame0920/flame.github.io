@@ -17,7 +17,7 @@
             <link rel="alternate" type="application/atom+xml" title="RSS" href="/flame.github.io/atom.xml">
         
     
-    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg"},"articleBody":" 分析InfinityHook\n\n\nInfinityHook剖析​    整体原理请看https://bbs.pediy.com/thread-253450.htm 剖析 InfinityHook 原理 掀起一场更激烈的攻与防恶战 \n​    本文着重讲解这篇文章中令人疑惑的几个重点 :\n\nClientContext 值分别为1、2、3时的3个不同的函数是在哪里被赋值和调用的\nEnableFlags 的值是如何影响ETW流程的\nEnableFlags  == EVENT_TRACE_FLAG_SYSTEMCALL时， 替换函数是如何定位到syscall的函数地址以及调用号\n扩展EnableFlags == 其他值时，如何hook\n\n关键函数\n123456789101112EXTERN_CNTSYSCALLAPI NTSTATUSNTAPIZwTraceControl (    _In_ ULONG FunctionCode,    _In_reads_bytes_opt_(InBufferLen) PVOID InBuffer,    _In_ ULONG InBufferLen,     _Out_writes_bytes_opt_(OutBufferLen) PVOID OutBuffer,    _In_ ULONG OutBufferLen,    _Out_ PULONG ReturnLength);\n\n1、ClientContext​    当FunctionCode == EtwpStartTrace时，调用NtTraceControl，会走到EtwpStartTrace函数，其中调用了EtwpStartLogger函数，参数与EtwpStartTrace一致。\n​    追踪ClientContext字段：\n\n​    EtwpInitLoggerContext 申请了一个**_WMI_LOGGER_CONTEXT**结构的指针LoggerContext，\n并在接下来的过程中使得LoggerContext-&gt;ClockType = Properties-&gt;ClientContext\n(Properties 指针是ZwTraceControl传入的指针，详情请看文章开头的链接)\n​    之后调用关键函数 ： EtwpInitializeTimeStamp\n​    \n​    在这个函数内：\n\n​    通过ClockType来获取相应的函数  : \n\n当ClockType = 1时， LoggerContext-&gt;GetCpuClock = PpmQueryTime\n\n当ClockType = 2时， LoggerContext-&gt;GetCpuClock = EtwpGetSystemTime\n\n当ClockType = 3时， LoggerContext-&gt;GetCpuClock = EtwpGetCycleCount\n\n当ClockType = 4时，如果EtwpGetHostPerfCounter能执行成功，则为EtwpGetHostPerfCounter，如果执行失败，则ClockType = 1；\n至此，函数赋值点以及规则弄清楚了，接下来就是搞清楚哪里调用的GetCpuClock 函数。\n拿syscall监控举例 : \n\n\n\n在调用NT函数前，先调用了PerfInfoLogSysCallEntry函数：\n\nPerfInfoLogSysCallEntry函数中红箭头指向位置为MagicCode，可以用来标定栈的位置，以便寻找调用函数地址和调用号，具体分析在第三节。\n继续跟踪EtwTraceSiloKernelEvent，发现调用了EtwpLogKernelEvent函数：\n\n跟踪EtwpLogKernelEvent函数，调用了EtwpReserveTraceBuffer函数：\n\n在EtwpReserveTraceBuffer函数中发现：\n\n​    此处函数调用的偏移点0x28与之前分析的赋值偏移点GetCpuClock(0x28)一致，所以此处就是GetCpuClock的调用点（这里分析结论下得比较武断，其实需要利用windbg下断点来看看是否真的一致，但是我懒了 - -）。\n​    此时分析的关键点变成rdi从何处来，根据IDA可知，EtwpReserveTraceBuffer中rdi = rcx，而rcx来自EtwpLogKernelEvent中mov rcx, r14。所以需要找出r14从何处来：\n\n​    根据上图可知，r14 = [rcx + rax] = [[r12 + 0x1C8] + r158], 而在EtwpLogKernelEvent中*r12 = rdx ， rdx来自EtwTraceSiloKernelEvent函数中的：\n\n​    r15 根据windbg逆向可得 r15 = 2（实际上R15来自EtwpLogKernelEvent 中r8，而r8的赋值比较复杂，这里简化起见直接给结论），所以最后结果就是\nLoggerContext = [[[EtwpHostSiloState] + 0x1C8] + 0x10]。\n​    根据上述结论可知，如果要替换GetCpuClock函数，则需要定位到EtwpHostSiloState，此处有个特殊的地方，根据IDA交叉引用可以看到：\n\n​    在一个函数中，EtwpHostSiloState被赋值：\n\n​    这里有两个全局变量被赋予值，qword_140429E08 = [rdi + 0x1C8] , qword_140429E10 = rdi通过IDA查看该值：\n\n​    发现全局变量 qword_140429E08 - 0x10的位置有一个EtwpDebuggerData，这个可以通过特征码定位，简化寻找EtwpHostSiloState的流程（因为EtwpDebuggerData绝大部分系统都有，而EtwpHostSiloState在不同的系统名称不同）。\n​    所以，LoggerContext =[[[EtwpDebuggerData + 0x18] + 0x1C8] + 0x10] , 或者 LoggerContext =[[EtwpDebuggerData + 0x10] + 0x10]\n","dateCreated":"2022-01-15T19:59:06+08:00","dateModified":"2022-03-11T13:46:51+08:00","datePublished":"2022-01-15T19:59:06+08:00","description":" 分析InfinityHook","headline":"InfinityHook分析","image":[],"mainEntityOfPage":{"@type":"WebPage","@id":"https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"},"publisher":{"@type":"Organization","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg","logo":{"@type":"ImageObject","url":"image_touxiang.jpg"}},"url":"https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/","keywords":"Driver, C/C++"}</script>
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg"},"articleBody":" 分析InfinityHook\n\n\nInfinityHook剖析​    整体原理请看https://bbs.pediy.com/thread-253450.htm 剖析 InfinityHook 原理 掀起一场更激烈的攻与防恶战 \n​    本文着重讲解这篇文章中令人疑惑的几个重点 :\n\nClientContext 值分别为1、2、3时的3个不同的函数是在哪里被赋值和调用的\nEnableFlags 的值是如何影响ETW流程的\nEnableFlags  == EVENT_TRACE_FLAG_SYSTEMCALL时， 替换函数是如何定位到syscall的函数地址以及调用号\n扩展EnableFlags == 其他值时，如何hook\n\n关键函数\n123456789101112EXTERN_CNTSYSCALLAPI NTSTATUSNTAPIZwTraceControl (    _In_ ULONG FunctionCode,    _In_reads_bytes_opt_(InBufferLen) PVOID InBuffer,    _In_ ULONG InBufferLen,     _Out_writes_bytes_opt_(OutBufferLen) PVOID OutBuffer,    _In_ ULONG OutBufferLen,    _Out_ PULONG ReturnLength);\n\n1、ClientContext​    当FunctionCode == EtwpStartTrace时，调用NtTraceControl，会走到EtwpStartTrace函数，其中调用了EtwpStartLogger函数，参数与EtwpStartTrace一致。\n​    追踪ClientContext字段：\n\n​    EtwpInitLoggerContext 申请了一个**_WMI_LOGGER_CONTEXT**结构的指针LoggerContext，\n并在接下来的过程中使得LoggerContext-&gt;ClockType = Properties-&gt;ClientContext\n(Properties 指针是ZwTraceControl传入的指针，详情请看文章开头的链接)\n​    之后调用关键函数 ： EtwpInitializeTimeStamp\n​    \n​    在这个函数内：\n\n​    通过ClockType来获取相应的函数  : \n\n当ClockType = 1时， LoggerContext-&gt;GetCpuClock = PpmQueryTime\n\n当ClockType = 2时， LoggerContext-&gt;GetCpuClock = EtwpGetSystemTime\n\n当ClockType = 3时， LoggerContext-&gt;GetCpuClock = EtwpGetCycleCount\n\n当ClockType = 4时，如果EtwpGetHostPerfCounter能执行成功，则为EtwpGetHostPerfCounter，如果执行失败，则ClockType = 1；\n至此，函数赋值点以及规则弄清楚了，接下来就是搞清楚哪里调用的GetCpuClock 函数。\n拿syscall监控举例 : \n\n\n\n在调用NT函数前，先调用了PerfInfoLogSysCallEntry函数：\n\nPerfInfoLogSysCallEntry函数中红箭头指向位置为MagicCode，可以用来标定栈的位置，以便寻找调用函数地址和调用号，具体分析在第三节。\n继续跟踪EtwTraceSiloKernelEvent，发现调用了EtwpLogKernelEvent函数：\n\n跟踪EtwpLogKernelEvent函数，调用了EtwpReserveTraceBuffer函数：\n\n在EtwpReserveTraceBuffer函数中发现：\n\n​    此处函数调用的偏移点0x28与之前分析的赋值偏移点GetCpuClock(0x28)一致，所以此处就是GetCpuClock的调用点（这里分析结论下得比较武断，其实需要利用windbg下断点来看看是否真的一致，但是我懒了 - -）。\n​    此时分析的关键点变成rdi从何处来，根据IDA可知，EtwpReserveTraceBuffer中rdi = rcx，而rcx来自EtwpLogKernelEvent中mov rcx, r14。所以需要找出r14从何处来：\n\n​    根据上图可知，r14 = [rcx + rax] = [[r12 + 0x1C8] + r158], 而在EtwpLogKernelEvent中*r12 = rdx ， rdx来自EtwTraceSiloKernelEvent函数中的：\n\n​    r15 根据windbg逆向可得 r15 = 2（实际上R15来自EtwpLogKernelEvent 中r8，而r8的赋值比较复杂，这里简化起见直接给结论），所以最后结果就是\nLoggerContext = [[[EtwpHostSiloState] + 0x1C8] + 0x10]。\n​    根据上述结论可知，如果要替换GetCpuClock函数，则需要定位到EtwpHostSiloState，此处有个特殊的地方，根据IDA交叉引用可以看到：\n\n​    在一个函数中，EtwpHostSiloState被赋值：\n\n​    这里有两个全局变量被赋予值，qword_140429E08 = [rdi + 0x1C8] , qword_140429E10 = rdi通过IDA查看该值：\n\n​    发现全局变量 qword_140429E08 - 0x10的位置有一个EtwpDebuggerData，这个可以通过特征码定位，简化寻找EtwpHostSiloState的流程（因为EtwpDebuggerData绝大部分系统都有，而EtwpHostSiloState在不同的系统名称不同）。\n​    所以，LoggerContext =[[[EtwpDebuggerData + 0x18] + 0x1C8] + 0x10] , 或者 LoggerContext =[[EtwpDebuggerData + 0x10] + 0x10]\n","dateCreated":"2022-01-15T19:59:06+08:00","dateModified":"2022-05-16T16:43:24+08:00","datePublished":"2022-01-15T19:59:06+08:00","description":" 分析InfinityHook","headline":"InfinityHook分析","image":[],"mainEntityOfPage":{"@type":"WebPage","@id":"https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/"},"publisher":{"@type":"Organization","name":"BurnFlame","sameAs":["https://github.com/Flame0920","zhang919963919@gmail.com"],"image":"image_touxiang.jpg","logo":{"@type":"ImageObject","url":"image_touxiang.jpg"}},"url":"https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/","keywords":"Driver, C/C++"}</script>
     <meta name="description" content="分析InfinityHook">
 <meta property="og:type" content="blog">
 <meta property="og:title" content="InfinityHook分析">
@@ -25,26 +25,25 @@
 <meta property="og:site_name" content="Flame&#39;s Security Home">
 <meta property="og:description" content="分析InfinityHook">
 <meta property="og:locale" content="zh_CN">
-<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116172443129.png">
-<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116173622317.png">
-<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116174711686.png">
-<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117164224033.png">
-<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117175650031.png">
-<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182009670.png">
-<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182051726.png">
-<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182204758.png">
-<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182703739.png">
-<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182852327.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90/image-20220116172443129.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90/image-20220116174711686.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90/image-20220117164224033.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90/image-20220117175650031.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90/image-20220117182009670.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90/image-20220117182051726.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90/image-20220117182204758.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90/image-20220117182703739.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90/image-20220117182852327.png">
 <meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117184204261.png">
-<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117184938866.png">
-<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117184302975.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90/image-20220117184938866.png">
+<meta property="og:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90/image-20220117184302975.png">
 <meta property="article:published_time" content="2022-01-15T11:59:06.000Z">
-<meta property="article:modified_time" content="2022-03-11T05:46:51.693Z">
+<meta property="article:modified_time" content="2022-05-16T08:43:24.207Z">
 <meta property="article:author" content="BurnFlame">
 <meta property="article:tag" content="Driver">
 <meta property="article:tag" content="C&#x2F;C++">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116172443129.png">
+<meta name="twitter:image" content="https://flame0920.github.io/flame.github.io/2022/01/15/InfinityHook%E5%88%86%E6%9E%90/InfinityHook%E5%88%86%E6%9E%90/image-20220116172443129.png">
     
     
         
@@ -327,14 +326,14 @@
 
 <h3 id="1、ClientContext"><a href="#1、ClientContext" class="headerlink" title="1、ClientContext"></a>1、ClientContext</h3><p>​    当FunctionCode == EtwpStartTrace时，调用<strong>NtTraceControl</strong>，会走到<strong>EtwpStartTrace</strong>函数，其中调用了<strong>EtwpStartLogger</strong>函数，参数与<strong>EtwpStartTrace</strong>一致。</p>
 <p>​    追踪<strong>ClientContext</strong>字段：</p>
-<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116172443129.png" alt="image-20220116172443129"></p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90/image-20220116172443129.png" alt="image-20220116172443129"></p>
 <p>​    <strong>EtwpInitLoggerContext</strong> 申请了一个**_WMI_LOGGER_CONTEXT**结构的指针LoggerContext，</p>
 <p>并在接下来的过程中使得<strong>LoggerContext</strong>-&gt;ClockType = <strong>Properties</strong>-&gt;ClientContext</p>
 <p>(Properties 指针是ZwTraceControl传入的指针，详情请看文章开头的链接)</p>
 <p>​    之后调用关键函数 ： <strong>EtwpInitializeTimeStamp</strong></p>
-<p>​    <img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116173622317.png" alt="image-20220116173622317"></p>
+<p>​    </p>
 <p>​    在这个函数内：</p>
-<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220116174711686.png"></p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90/image-20220116174711686.png"></p>
 <p>​    通过ClockType来获取相应的函数  : </p>
 <ul>
 <li><p>当ClockType = 1时， LoggerContext-&gt;GetCpuClock = <strong>PpmQueryTime</strong></p>
@@ -346,31 +345,31 @@
 <li><p>当ClockType = 4时，如果EtwpGetHostPerfCounter能执行成功，则为EtwpGetHostPerfCounter，如果执行失败，则ClockType = 1；</p>
 <p>至此，函数赋值点以及规则弄清楚了，接下来就是搞清楚哪里调用的<strong>GetCpuClock</strong> 函数。</p>
 <p>拿syscall监控举例 : </p>
-<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117164224033.png" alt="image-20220117164224033"></p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90/image-20220117164224033.png" alt="image-20220117164224033"></p>
 </li>
 </ul>
 <p>在调用NT函数前，先调用了<strong>PerfInfoLogSysCallEntry</strong>函数：</p>
-<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117175650031.png" alt="image-20220117175650031"></p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90/image-20220117175650031.png" alt="image-20220117175650031"></p>
 <p>PerfInfoLogSysCallEntry函数中红箭头指向位置为MagicCode，可以用来标定栈的位置，以便寻找调用函数地址和调用号，具体分析在第三节。</p>
 <p>继续跟踪<strong>EtwTraceSiloKernelEvent</strong>，发现调用了<strong>EtwpLogKernelEvent</strong>函数：</p>
-<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182009670.png" alt="image-20220117182009670"></p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90/image-20220117182009670.png" alt="image-20220117182009670"></p>
 <p>跟踪<strong>EtwpLogKernelEvent</strong>函数，调用了<strong>EtwpReserveTraceBuffer</strong>函数：</p>
-<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182051726.png" alt="image-20220117182051726"></p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90/image-20220117182051726.png" alt="image-20220117182051726"></p>
 <p>在<strong>EtwpReserveTraceBuffer</strong>函数中发现：</p>
-<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182204758.png" alt="image-20220117182204758"></p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90/image-20220117182204758.png" alt="image-20220117182204758"></p>
 <p>​    此处函数调用的偏移点0x28与之前分析的赋值偏移点<strong>GetCpuClock</strong>(0x28)一致，所以此处就是<strong>GetCpuClock</strong>的调用点（这里分析结论下得比较武断，其实需要利用windbg下断点来看看是否真的一致，但是我懒了 - -）。</p>
 <p>​    此时分析的关键点变成<strong>rdi</strong>从何处来，根据IDA可知，<strong>EtwpReserveTraceBuffer</strong>中rdi = rcx，而rcx来自<strong>EtwpLogKernelEvent</strong>中mov rcx, r14。所以需要找出<strong>r14</strong>从何处来：</p>
-<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182703739.png" alt="image-20220117182703739"></p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90/image-20220117182703739.png" alt="image-20220117182703739"></p>
 <p>​    根据上图可知，r14 = [rcx + rax] = [[r12 + 0x1C8] + r15<em>8], 而在<strong>EtwpLogKernelEvent</strong>中*<em>r12 = rdx</em></em> ， rdx来自<strong>EtwTraceSiloKernelEvent</strong>函数中的：</p>
-<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117182852327.png" alt="image-20220117182852327"></p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90/image-20220117182852327.png" alt="image-20220117182852327"></p>
 <p>​    r15 根据windbg逆向可得 r15 = 2（实际上R15来自<strong>EtwpLogKernelEvent</strong> 中r8，而r8的赋值比较复杂，这里简化起见直接给结论），所以最后结果就是</p>
 <p>LoggerContext = [[[<strong>EtwpHostSiloState</strong>] + 0x1C8] + 0x10]。</p>
 <p>​    根据上述结论可知，如果要替换<strong>GetCpuClock</strong>函数，则需要定位到<strong>EtwpHostSiloState</strong>，此处有个特殊的地方，根据IDA交叉引用可以看到：</p>
 <p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117184204261.png" alt="image-20220117184204261"></p>
 <p>​    在一个函数中，EtwpHostSiloState被赋值：</p>
-<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117184938866.png"></p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90/image-20220117184938866.png"></p>
 <p>​    这里有两个全局变量被赋予值，<strong>qword_140429E08</strong> = [rdi + 0x1C8] , <strong>qword_140429E10</strong> = rdi通过IDA查看该值：</p>
-<p><img src="InfinityHook%E5%88%86%E6%9E%90.assets/image-20220117184302975.png" alt="image-20220117184302975"></p>
+<p><img src="InfinityHook%E5%88%86%E6%9E%90/image-20220117184302975.png" alt="image-20220117184302975"></p>
 <p>​    发现全局变量 <strong>qword_140429E08</strong> - 0x10的位置有一个<strong>EtwpDebuggerData</strong>，这个可以通过特征码定位，简化寻找<strong>EtwpHostSiloState</strong>的流程（因为EtwpDebuggerData绝大部分系统都有，而EtwpHostSiloState在不同的系统名称不同）。</p>
 <p>​    所以，LoggerContext =[[[<strong>EtwpDebuggerData + 0x18</strong>] + 0x1C8] + 0x10] , 或者 LoggerContext =[[<strong>EtwpDebuggerData + 0x10</strong>] + 0x10]</p>
 
